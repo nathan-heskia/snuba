@@ -94,6 +94,7 @@ RUN set -ex; \
     buildDeps=' \
         git \
         gcc \
+        g++ \
         libc6-dev \
         liblz4-dev \
         libpcre3-dev \
