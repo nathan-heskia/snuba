@@ -19,6 +19,7 @@ from snuba.replacer import get_projects_query_flags
 from snuba.split import split_query
 from snuba.datasets.factory import InvalidDatasetError, get_dataset, get_enabled_dataset_names
 from snuba.datasets.schema import local_dataset_mode
+from snuba.schemas import GENERIC_QUERY_SCHEMA
 from snuba.redis import redis_client
 from snuba.util import Timer
 
@@ -182,13 +183,22 @@ def parse_request_body(request):
         raise BadRequest(str(error)) from error
 
 
-def validate_request_content(body, schema, timer):
+def validate_request_content(body, options_schema, timer):
+    query = {key: body.pop(key) for key in GENERIC_QUERY_SCHEMA['properties'].keys() if key in body}
+
     try:
-        schemas.validate(body, schema)
+        schemas.validate(query, GENERIC_QUERY_SCHEMA)
+    except jsonschema.ValidationError as error:
+        raise BadRequest(str(error)) from error
+
+    try:
+        schemas.validate(body, options_schema)
     except jsonschema.ValidationError as error:
         raise BadRequest(str(error)) from error
 
     timer.mark('validate_schema')
+
+    return query, body
 
 
 @application.route('/query', methods=['GET', 'POST'])
@@ -209,6 +219,7 @@ def unqualified_query_view(*, timer: Timer):
 def dataset_query_view(*, dataset_name: str, timer: Timer):
     dataset = get_dataset(dataset_name)
     if request.method == 'GET':
+        raise NotImplementedError  # TODO: Fix
         return render_template(
             'query.html',
             query_template=json.dumps(
@@ -228,9 +239,9 @@ def dataset_query(dataset, body, timer):
     assert request.method == 'POST'
     ensure_table_exists(dataset)
 
-    validate_request_content(body, dataset.get_query_schema(), timer)
+    query, options = validate_request_content(body, dataset.get_query_options_schema(), timer)
 
-    result, status = parse_and_run_query(dataset, body, timer)
+    result, status = parse_and_run_query(dataset, query, options, timer)
     return (
         json.dumps(
             result,
@@ -242,7 +253,8 @@ def dataset_query(dataset, body, timer):
 
 
 @split_query
-def parse_and_run_query(dataset, validated_body, timer):
+def parse_and_run_query(dataset, query, options, timer):
+    validated_body = {**query, **options}  # XXX: compatibility
     body = deepcopy(validated_body)
 
     table = dataset.get_schema().get_table_name()
@@ -412,14 +424,17 @@ def parse_and_run_query(dataset, validated_body, timer):
 @util.time_request('sdk-stats')
 def sdk_distribution(*, timer: Timer):
     body = parse_request_body(request)
-    validate_request_content(body, schemas.SDK_STATS_SCHEMA, timer)
 
-    body['project'] = []
-    body['aggregations'] = [
+    query, options = validate_request_content(body, schemas.SDK_STATS_QUERY_OPTIONS_SCHEMA, timer)
+    assert query['groupby'] == ['project_id']  # XXX: I hate this
+
+    query['aggregations'] = [
         ['uniq', 'project_id', 'projects'],
         ['count()', None, 'count'],
     ]
-    body['groupby'].extend(['sdk_name', 'rtime'])
+    query['groupby'].extend(['sdk_name', 'rtime'])
+
+    options['project'] = []
 
     dataset = get_dataset('events')
     ensure_table_exists(dataset)
@@ -535,11 +550,9 @@ if application.debug or application.testing:
     def create_subscription():
         return json.dumps({'subscription_id': uuid1().hex}), 202, {'Content-Type': 'application/json'}
 
-
     @application.route('/subscriptions/<uuid>/renew', methods=['POST'])
     def renew_subscription(uuid):
         return 'ok', 202, {'Content-Type': 'text/plain'}
-
 
     @application.route('/subscriptions/<uuid>', methods=['DELETE'])
     def delete_subscription(uuid):

@@ -13,34 +13,32 @@ MIN_COLS = ['project_id', 'event_id', 'timestamp']
 
 def split_query(query_func):
 
-    def wrapper(dataset, body, *args, **kwargs):
+    def wrapper(dataset, query, options, *args, **kwargs):
         use_split = state.get_configs([
             ('use_split', 0),
         ])
-        limit = body.get('limit', 0)
-        remaining_offset = body.get('offset', 0)
-        orderby = util.to_list(body.get('orderby'))
+        limit = query.get('limit', 0)
+        remaining_offset = query.get('offset', 0)
+        orderby = util.to_list(query.get('orderby'))
 
-        common_conditions = use_split and limit and not body.get('groupby')
+        common_conditions = use_split and limit and not query.get('groupby')
 
         if common_conditions:
-            total_col_count = len(util.all_referenced_columns(body))
-
-            min_col_count = len(util.all_referenced_columns(
-                {**body, 'selected_columns': MIN_COLS}))
+            total_col_count = len(util.all_referenced_columns(query))
+            min_col_count = len(util.all_referenced_columns({**query, 'selected_columns': MIN_COLS}))
 
             if (
-                body.get('selected_columns')
-                and not body.get('aggregations')
+                query.get('selected_columns')
+                and not query.get('aggregations')
                 and total_col_count > min_col_count
             ):
-                return col_split(dataset, body, *args, **kwargs)
+                return col_split(dataset, query, options, *args, **kwargs)
             elif orderby[:1] == ['-timestamp'] and remaining_offset < 1000:
-                return time_split(dataset, body, *args, **kwargs)
+                return time_split(dataset, query, options, *args, **kwargs)
 
-        return query_func(dataset, body, *args, **kwargs)
+        return query_func(dataset, query, options, *args, **kwargs)
 
-    def time_split(dataset, body, *args, **kwargs):
+    def time_split(dataset, query, options, *args, **kwargs):
         """
         If a query is:
             - ORDER BY timestamp DESC
@@ -57,11 +55,11 @@ def split_query(query_func):
             ('split_step', 3600),  # default 1 hour
         ])
 
-        limit = body.get('limit', 0)
-        remaining_offset = body.get('offset', 0)
+        limit = query.get('limit', 0)
+        remaining_offset = query.get('offset', 0)
 
-        to_date = util.parse_datetime(body['to_date'], date_align)
-        from_date = util.parse_datetime(body['from_date'], date_align)
+        to_date = util.parse_datetime(options['to_date'], date_align)
+        from_date = util.parse_datetime(options['from_date'], date_align)
 
         overall_result = None
         split_end = to_date
@@ -69,13 +67,13 @@ def split_query(query_func):
         total_results = 0
         status = 0
         while split_start < split_end and total_results < limit:
-            body['from_date'] = split_start.isoformat()
-            body['to_date'] = split_end.isoformat()
+            options['from_date'] = split_start.isoformat()
+            options['to_date'] = split_end.isoformat()
             # Because its paged, we have to ask for (limit+offset) results
             # and set offset=0 so we can then trim them ourselves.
-            body['offset'] = 0
-            body['limit'] = limit - total_results + remaining_offset
-            result, status = query_func(dataset, body, *args, **kwargs)
+            query['offset'] = 0
+            query['limit'] = limit - total_results + remaining_offset
+            result, status = query_func(dataset, query, options, *args, **kwargs)
 
             # If something failed, discard all progress and just return that
             if status != 200:
@@ -114,40 +112,33 @@ def split_query(query_func):
 
         return overall_result, status
 
-    def col_split(dataset, body, *args, **kwargs):
+    def col_split(dataset, query, options, *args, **kwargs):
         """
         Split query in 2 steps if a large number of columns is being selected.
             - First query only selects event_id and project_id.
             - Second query selects all fields for only those events.
             - Shrink the date range.
         """
-        minimal_query = {**body, 'selected_columns': MIN_COLS}
-
-        result, status = query_func(dataset, minimal_query, *args, **kwargs)
+        minimal_query = {**query, 'selected_columns': MIN_COLS}
+        result, status = query_func(dataset, minimal_query, options, *args, **kwargs)
 
         # If something failed, just return
         if status != 200:
             return result, status
 
-        conditions = body.get('conditions', [])
-
         if result['data']:
-            project_ids = list(set([event['project_id'] for event in result['data']]))
-            body['project_id'] = project_ids
-
             event_ids = list(set([event['event_id'] for event in result['data']]))
-            conditions.append(('event_id', 'IN', event_ids))
+            query.setdefault('conditions', []).append(('event_id', 'IN', event_ids))
+            query['offset'] = 0
+            query['limit'] = len(event_ids)
 
             timestamps = [event['timestamp'] for event in result['data']]
-            from_date = util.parse_datetime(min(timestamps))
+            options['from_date'] = util.parse_datetime(min(timestamps)).isoformat()
             # We add 1 second since this gets translated to ('timestamp', '<', to_date)
             # and events are stored with a granularity of 1 second.
-            to_date = util.parse_datetime(max(timestamps)) + timedelta(seconds=1)
-            body['from_date'] = from_date.isoformat()
-            body['to_date'] = to_date.isoformat()
-            body['offset'] = 0
-            body['limit'] = len(event_ids)
+            options['to_date'] = (util.parse_datetime(max(timestamps)) + timedelta(seconds=1)).isoformat()
+            options['project'] = list(set([event['project_id'] for event in result['data']]))
 
-        return query_func(dataset, {**body, 'conditions': conditions}, *args, **kwargs)
+        return query_func(dataset, query, options, *args, **kwargs)
 
     return wrapper
