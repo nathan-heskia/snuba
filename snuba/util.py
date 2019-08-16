@@ -19,6 +19,9 @@ from snuba.clickhouse import escape_col
 from snuba.reader import NativeDriverReader
 
 
+from snuba.clickhouse import ClickhousePool
+from snuba.datasets.events import EventsDataset
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Union
 logger = logging.getLogger('snuba.util')
 
 
@@ -34,11 +37,11 @@ class InvalidConditionException(Exception):
     pass
 
 
-def to_list(value):
+def to_list(value: Any) -> Any:
     return value if isinstance(value, list) else [value]
 
 
-def string_col(dataset, col):
+def string_col(dataset: EventsDataset, col: str) -> str:
     col_type = dataset.get_schema().get_columns().get(col, None)
     col_type = str(col_type) if col_type else None
 
@@ -48,12 +51,12 @@ def string_col(dataset, col):
         return 'toString({})'.format(escape_col(col))
 
 
-def parse_datetime(value, alignment=1):
+def parse_datetime(value: str, alignment: int = 1) -> datetime:
     dt = dateutil_parse(value, ignoretz=True).replace(microsecond=0)
     return dt - timedelta(seconds=(dt - dt.min).seconds % alignment)
 
 
-def function_expr(fn, args_expr=''):
+def function_expr(fn: str, args_expr: str = '') -> str:
     """
     Generate an expression for a given function name and an already-evaluated
     args expression. This is a place to define convenience functions that evaluate
@@ -84,7 +87,7 @@ def function_expr(fn, args_expr=''):
     # default: just return fn(args_expr)
     return  u'{}({})'.format(fn, args_expr)
 
-def is_function(column_expr, depth=0):
+def is_function(column_expr: Any, depth: int = 0) -> Any:
     """
     Returns a 3-tuple of (name, args, alias) if column_expr is a function,
     otherwise None.
@@ -117,7 +120,7 @@ def is_function(column_expr, depth=0):
     else:
         return None
 
-def column_expr(dataset, column_name, body, alias=None, aggregate=None):
+def column_expr(dataset: EventsDataset, column_name: Any, body: Dict[str, Any], alias: Optional[str] = None, aggregate: Optional[str] = None) -> str:
     """
     Certain special column names expand into more complex expressions. Return
     a 2-tuple of:
@@ -144,7 +147,7 @@ def column_expr(dataset, column_name, body, alias=None, aggregate=None):
     return alias_expr(expr, alias, body)
 
 
-def complex_column_expr(dataset, expr, body, depth=0):
+def complex_column_expr(dataset: EventsDataset, expr: Any, body: Dict[str, Any], depth: int = 0) -> str:
     function_tuple = is_function(expr, depth)
     if function_tuple is None:
         raise ValueError('complex_column_expr was given an expr %s that is not a function at depth %d.' % (expr, depth))
@@ -173,7 +176,7 @@ def complex_column_expr(dataset, expr, body, depth=0):
     return ret
 
 
-def alias_expr(expr, alias, body):
+def alias_expr(expr: str, alias: str, body: Dict[str, Any]) -> str:
     """
     Return the correct expression to use in the final SQL. Keeps a cache of
     the previously created expressions and aliases, so it knows when it can
@@ -195,7 +198,7 @@ def alias_expr(expr, alias, body):
         return u'({} AS {})'.format(expr, alias)
 
 
-def is_condition(cond_or_list):
+def is_condition(cond_or_list: Any) -> bool:
     return (
         # A condition is:
         # a 3-tuple
@@ -207,7 +210,7 @@ def is_condition(cond_or_list):
     )
 
 
-def all_referenced_columns(body):
+def all_referenced_columns(body: Dict[str, Any]) -> Set[str]:
     """
     Return the set of all columns that are used by a query.
     """
@@ -230,7 +233,7 @@ def all_referenced_columns(body):
     return set(chain(*[columns_in_expr(ex) for ex in col_exprs]))
 
 
-def columns_in_expr(expr):
+def columns_in_expr(expr: Union[List[Union[str, List[Union[str, int]]]], str, List[Union[str, List[Union[str, List[Union[str, List[str]]]]]]], int, List[Union[str, List[str]]]]) -> List[str]:
     """
     Get the set of columns that are referenced by a single column expression.
     Either it is a simple string with the column name, or a nested function
@@ -248,13 +251,13 @@ def columns_in_expr(expr):
     return cols
 
 
-def tuplify(nested):
+def tuplify(nested: Any) -> Any:
     if isinstance(nested, (list, tuple)):
         return tuple(tuplify(child) for child in nested)
     return nested
 
 
-def conditions_expr(dataset, conditions, body, depth=0):
+def conditions_expr(dataset: EventsDataset, conditions: Any, body: Dict[str, Any], depth: int = 0) -> str:
     """
     Return a boolean expression suitable for putting in the WHERE clause of the
     query.  The expression is constructed by ANDing groups of OR expressions.
@@ -322,12 +325,12 @@ def conditions_expr(dataset, conditions, body, depth=0):
         raise InvalidConditionException(str(conditions))
 
 
-def escape_string(str):
+def escape_string(str: str) -> str:
     str = ESCAPE_STRING_RE.sub(r"\\\1", str)
     return u"'{}'".format(str)
 
 
-def escape_literal(value):
+def escape_literal(value: Any) -> str:
     """
     Escape a literal value for use in a SQL clause.
     """
@@ -348,7 +351,7 @@ def escape_literal(value):
         raise ValueError(u'Do not know how to escape {} for SQL'.format(type(value)))
 
 
-def raw_query(body, sql, client, timer, stats=None):
+def raw_query(body: Dict[str, Any], sql: str, client: ClickhousePool, timer: Timer, stats: Optional[Dict[str, Union[str, bool, int, float]]] = None) -> Any:
     """
     Submit a raw SQL query to clickhouse and do some post-processing on it to
     fix some of the formatting issues in the result JSON
@@ -515,15 +518,15 @@ def raw_query(body, sql, client, timer, stats=None):
 
 
 class Timer(object):
-    def __init__(self, name=''):
+    def __init__(self, name: str = '') -> None:
         self.marks = [(name, time.time())]
         self.final = None
 
-    def mark(self, name):
+    def mark(self, name: str) -> None:
         self.final = None
         self.marks.append((name, time.time()))
 
-    def finish(self):
+    def finish(self) -> Dict[str, Union[int, Dict[str, int]]]:
         if not self.final:
             start = self.marks[0][1]
             end = time.time() if len(self.marks) == 1 else self.marks[-1][1]
@@ -538,7 +541,7 @@ class Timer(object):
             }
         return self.final
 
-    def for_json(self):
+    def for_json(self) -> Dict[str, Union[int, Dict[str, int]]]:
         return self.finish()
 
     def send_metrics_to(self, metrics, tags=None, mark_tags=None):
@@ -549,7 +552,7 @@ class Timer(object):
             metrics.timing('{}.{}'.format(name, mark), duration, tags=mark_tags)
 
 
-def time_request(name):
+def time_request(name: str) -> Callable:
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -575,14 +578,14 @@ def decode_part_str(part_str: str) -> Part:
     return Part(date, int(retention_days))
 
 
-def force_bytes(s):
+def force_bytes(s: str) -> bytes:
     if isinstance(s, bytes):
         return s
     return s.encode('utf-8', 'replace')
 
 
 @contextmanager
-def settings_override(overrides):
+def settings_override(overrides: Dict[str, bool]) -> Iterator[None]:
     previous = {}
     for k, v in overrides.items():
         previous[k] = getattr(settings, k, None)
