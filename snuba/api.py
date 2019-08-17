@@ -21,6 +21,7 @@ from snuba.datasets.factory import InvalidDatasetError, get_dataset, get_enabled
 from snuba.datasets.schema import local_dataset_mode
 from snuba.schemas import GENERIC_QUERY_SCHEMA
 from snuba.redis import redis_client
+from snuba.query import normalize_query
 from snuba.util import Timer
 
 
@@ -256,6 +257,8 @@ def dataset_query(dataset, body, timer):
 
 @split_query
 def parse_and_run_query(dataset, query, extensions, timer):
+    query = normalize_query(query)
+
     validated_body = {**query, **extensions}  # XXX: compatibility
     body = deepcopy(validated_body)
 
@@ -274,7 +277,7 @@ def parse_and_run_query(dataset, query, extensions, timer):
     if max_days is not None and (to_date - from_date).days > max_days:
         from_date = to_date - timedelta(days=max_days)
 
-    where_conditions = body.get('conditions', [])
+    where_conditions = body['conditions']
     where_conditions.extend([
         ('timestamp', '>=', from_date),
         ('timestamp', '<', to_date),
@@ -288,7 +291,7 @@ def parse_and_run_query(dataset, query, extensions, timer):
     if project_ids:
         where_conditions.append(('project_id', 'IN', project_ids))
 
-    having_conditions = body.get('having', [])
+    having_conditions = body['having']
 
     aggregate_exprs = [
         util.column_expr(dataset, col, body, alias, agg)
@@ -322,13 +325,14 @@ def parse_and_run_query(dataset, query, extensions, timer):
     if final:
         from_clause = u'{} FINAL'.format(from_clause)
 
-    sample = body.get('sample', settings.TURBO_SAMPLE_RATE if turbo else config_sample)
+    sample = body['sample']
+    if sample is None:
+        sample = settings.TURBO_SAMPLE_RATE if turbo else config_sample
     if sample != 1:
         from_clause = u'{} SAMPLE {}'.format(from_clause, sample)
 
     joins = []
-
-    if 'arrayjoin' in body:
+    if body['arrayjoin'] is not None:
         joins.append(u'ARRAY JOIN {}'.format(body['arrayjoin']))
     join_clause = ' '.join(joins)
 
@@ -368,13 +372,13 @@ def parse_and_run_query(dataset, query, extensions, timer):
 
     group_clause = ', '.join(util.column_expr(dataset, gb, body) for gb in groupby)
     if group_clause:
-        if body.get('totals', False):
+        if body['totals']:
             group_clause = 'GROUP BY ({}) WITH TOTALS'.format(group_clause)
         else:
             group_clause = 'GROUP BY ({})'.format(group_clause)
 
     order_clause = ''
-    if body.get('orderby'):
+    if body['orderby']:
         orderby = [util.column_expr(dataset, util.tuplify(ob), body) for ob in util.to_list(body['orderby'])]
         orderby = [u'{} {}'.format(
             ob.lstrip('-'),
@@ -383,12 +387,15 @@ def parse_and_run_query(dataset, query, extensions, timer):
         order_clause = u'ORDER BY {}'.format(', '.join(orderby))
 
     limitby_clause = ''
-    if 'limitby' in body:
+    if body['limitby'] is not None:
         limitby_clause = 'LIMIT {} BY {}'.format(*body['limitby'])
 
     limit_clause = ''
-    if 'limit' in body:
-        limit_clause = 'LIMIT {}, {}'.format(body.get('offset', 0), body['limit'])
+    if body['limit'] is not None:
+        if body['offset'] is None:
+            limit_clause = 'LIMIT {}'.format(body['limit'])
+        else:
+            limit_clause = 'LIMIT {}, {}'.format(body['offset'], body['limit'])
 
     sql = ' '.join([c for c in [
         select_clause,
