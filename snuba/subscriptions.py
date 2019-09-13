@@ -1,6 +1,25 @@
-import functools
 from concurrent.futures import Future, as_completed
-from typing import Any, Iterable, Iterator, NamedTuple, Optional
+from typing import (
+    Any,
+    Generic,
+    Iterable,
+    Iterator,
+    Mapping,
+    MutableMapping,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+)
+
+from confluent_kafka import (
+    TIMESTAMP_LOG_APPEND_TIME,
+    Consumer,
+    KafkaConsumer,
+    TopicPartition,
+)
 
 
 # TODO: Synchronize these types with the Reader interface.
@@ -25,22 +44,99 @@ class TaskSet:
     def __iter__(self) -> Iterator[Task]:
         raise NotImplementedError
 
-    def commit(self) -> Future[None]:
-        """Mark all tasks within the set as completed."""
+
+TTaskSet = TypeVar('TTaskSet', bound=TaskSet)
+
+
+class Scheduler(Generic[TTaskSet]):
+    def poll(self, timeout: Optional[float] = None) -> Optional[TTaskSet]:
+        """
+        Poll to see if any tasks are ready to execute.
+        """
+        raise NotImplementedError
+
+    def commit(self, tasks: TTaskSet):
+        """
+        Mark all tasks within the task set as completed.
+        """
+        raise NotImplementedError
+
+
+class KafkaTaskSet(TaskSet):
+    pass
+
+
+class KafkaScheduler(Scheduler[KafkaTaskSet]):
+    def __init__(self, configuration: Mapping[str, Any], topic: str) -> None:
+        self.__configuration = configuration
+        self.__topic = topic
+
+        self.__partitions: MutableMapping[
+            int, Tuple[Union[Tuple[int, float], None], Union[Tuple[int, float], None]]
+        ] = {}
+
+        self.__consumer = KafkaConsumer(configuration)
+        self.__consumer.subscribe(
+            [topic], on_assign=self.__on_assign, on_revoke=self.__on_revoke
+        )
+
+    def __on_assign(
+        self, consumer: Consumer, assignment: Sequence[TopicPartition]
+    ) -> None:
+        for tp in assignment:
+            if tp.partition not in self.__partitions:
+                self.__partitions[tp.partition] = (None, None)
+
+    def __on_revoke(
+        self, consumer: Consumer, assignment: Sequence[TopicPartition]
+    ) -> None:
+        for tp in assignment:
+            del self.__partitions[tp.partition]
+
+    def poll(self, timeout: Optional[float] = None) -> Optional[KafkaTaskSet]:
+        # TODO: Actually respect the `timeout` parameter.
+        while True:
+            message = self.__consumer.poll()
+            if message is None:
+                continue
+
+            error = message.error()
+            if error is not None:
+                raise error
+
+            timestamp_type, timestamp = message.timestamp()
+            assert timestamp_type == TIMESTAMP_LOG_APPEND_TIME
+
+            partition = message.partition()
+            previous, current = self.__partitions[partition]
+            if previous is None:
+                self.__partitions[partition] = (
+                    None,
+                    (message.offset(), message.timestamp()),
+                )
+            else:
+                self.__partitions[partition] = (
+                    current,
+                    (message.offset(), message.timestamp()),
+                )
+                # TODO: Probably log how far the message timestamp has drifted
+                # from the current timestamp so that we know how lagged
+                # subscriptions are.
+                # TODO: Check to see if there are any tasks to execute that are
+                # scheduled between the two timestamps. If there are tasks to
+                # run, return a TaskSet and pause this partition until the task
+                # set has been committed. Otherwise, continue consuming
+                # messages.
+                raise NotImplementedError
+
+    def commit(self, tasks: KafkaTaskSet):
+        # TODO: This should also unlock the partition.
         # If the scheduler is stateful, this enables marking a collection of
         # tasks as done (for example, if we are using a Kafka partition
         # timestamp advancing as a "clock" rather than the system/wall clock,
         # this allows for committing that offset after all of the tasks
         # scheduled for that point have been completed.)
         # TODO: This probably could use a better return type.
-        raise NotImplementedError
-
-
-class Scheduler:
-    def poll(self, timeout: Optional[float] = None) -> Optional[TaskSet]:
-        """
-        Poll to see if any tasks are ready to execute.
-        """
         raise NotImplementedError
 
 
@@ -99,4 +195,4 @@ if __name__ == "__main__":
                 # TODO: What should we do on a failure to publish results?
                 producer.produce(task, result).result()
 
-        tasks.commit().result()
+        scheduler.commit(tasks)
