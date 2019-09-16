@@ -66,14 +66,56 @@ class KafkaTaskSet(TaskSet):
     pass
 
 
+class Position(NamedTuple):
+    offset: int
+    timestamp: float
+
+
+class PartitionState(NamedTuple):
+    previous: Optional[Position]
+    current: Position
+
+
 class KafkaScheduler(Scheduler[KafkaTaskSet]):
     def __init__(self, configuration: Mapping[str, Any], topic: str) -> None:
         self.__configuration = configuration
         self.__topic = topic
 
-        self.__partitions: MutableMapping[
-            int, Tuple[Union[Tuple[int, float], None], Union[Tuple[int, float], None]]
-        ] = {}
+        # There are three valid states for a partition in this mapping:
+        # 1. Partitions that have been assigned but have not yet had any messages
+        # consumed from them will have a value of ``None``.
+        # 2. Partitions that have had a single message consumed will have a
+        # value of ``(None, Position of Message A)``.
+        # 3. Partitions that have had more than one message consumed will have
+        # a value of ``(Position of Message A, Position of Message B)``.
+        #
+        # Take this example, where a partition contains three messages (MA, MB,
+        # MC) and a scheduled task (T).
+        #
+        #    Messages:           MA        MB        MC
+        #    Timeline: +---------+---------+---------+---------
+        #    Tasks:    ^    ^    ^    ^    ^    ^    ^    ^
+        #              T1   T2   T3   T4   T5   T6   T7   T8
+        #
+        #  In this example, when we are assigned the partition, the state is set
+        #  to ``None``. After consuming Message A ("MA"), the partition state
+        #  becomes ``(None, MA)``. No tasks will have yet been executed. When
+        #  Message B is consumed, the partition state becomes be ``(MA, MB)``.
+        #  At this point, T4 and T5 (the tasks that are scheduled between the
+        #  timestamps of messages "MA" and "MB") will be included in the
+        #  ``TaskSet`` returned by the ``poll`` call. T3 will not be included,
+        #  since it was presumably contained within a ``TaskSet`` instance
+        #  returned by a previous ``poll`` call. The lower bound ("MA" in this
+        #  case) is exclusive, while the upper bound ("MB") is inclusive. When
+        #  all tasks in the ``TaskSet`` have been successfully evaluated,
+        #  committing the task set will commit the *lower bound* offset of this
+        #  task set. The lower bound is selected so that on consumer restart or
+        #  rebalance, the message that has an offset greater than the lower
+        #  bound (in our case, "MB") will be the first message consumed. The
+        #  next tasks to be executed will be those that are scheduled between
+        #  the timestamps of "MB" and "MC" (again: lower bound exclusive, upper
+        #  bound inclusive): T6 and T7.
+        self.__partitions: MutableMapping[int, Optional[PartitionState]] = {}
 
         self.__consumer = KafkaConsumer(configuration)
         self.__consumer.subscribe(
@@ -85,7 +127,7 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
     ) -> None:
         for tp in assignment:
             if tp.partition not in self.__partitions:
-                self.__partitions[tp.partition] = (None, None)
+                self.__partitions[tp.partition] = None
 
     def __on_revoke(
         self, consumer: Consumer, assignment: Sequence[TopicPartition]
@@ -108,26 +150,18 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
             assert timestamp_type == TIMESTAMP_LOG_APPEND_TIME
 
             partition = message.partition()
-            previous, current = self.__partitions[partition]
-            if previous is None:
-                self.__partitions[partition] = (
-                    None,
-                    (message.offset(), message.timestamp()),
-                )
+            assert partition in self.__partitions
+
+            state = self.__partitions[partition]
+            position = Position(message.offset(), timestamp / 1000.0)
+            if state is None:
+                state = PartitionState(None, position)
             else:
-                self.__partitions[partition] = (
-                    current,
-                    (message.offset(), message.timestamp()),
-                )
-                # TODO: Probably log how far the message timestamp has drifted
-                # from the current timestamp so that we know how lagged
-                # subscriptions are.
-                # TODO: Check to see if there are any tasks to execute that are
-                # scheduled between the two timestamps. If there are tasks to
-                # run, return a TaskSet and pause this partition until the task
-                # set has been committed. Otherwise, continue consuming
-                # messages.
-                raise NotImplementedError
+                state = PartitionState(state.current, position)
+                # TODO: Create ``TaskSet`` with tasks between timestamps.
+                # TODO: Pause partition consumption.
+
+            self.__partitions[partition] = state
 
     def commit(self, tasks: KafkaTaskSet):
         # TODO: This should also unlock the partition.
