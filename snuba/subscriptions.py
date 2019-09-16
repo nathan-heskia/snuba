@@ -90,33 +90,34 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
         # a value of ``(Position of Message A, Position of Message B)``.
         #
         # Take this example, where a partition contains three messages (MA, MB,
-        # MC) and a scheduled task (T).
+        # MC) and a scheduled task (T1-TN).
         #
         #    Messages:           MA        MB        MC
         #    Timeline: +---------+---------+---------+---------
         #    Tasks:    ^    ^    ^    ^    ^    ^    ^    ^
         #              T1   T2   T3   T4   T5   T6   T7   T8
         #
-        #  In this example, when we are assigned the partition, the state is set
-        #  to ``None``. After consuming Message A ("MA"), the partition state
-        #  becomes ``(None, MA)``. No tasks will have yet been executed. When
-        #  Message B is consumed, the partition state becomes be ``(MA, MB)``.
-        #  At this point, T4 and T5 (the tasks that are scheduled between the
-        #  timestamps of messages "MA" and "MB") will be included in the
-        #  ``TaskSet`` returned by the ``poll`` call. T3 will not be included,
-        #  since it was presumably contained within a ``TaskSet`` instance
-        #  returned by a previous ``poll`` call. The lower bound ("MA" in this
-        #  case) is exclusive, while the upper bound ("MB") is inclusive. When
-        #  all tasks in the ``TaskSet`` have been successfully evaluated,
-        #  committing the task set will commit the *lower bound* offset of this
-        #  task set. The lower bound is selected so that on consumer restart or
-        #  rebalance, the message that has an offset greater than the lower
-        #  bound (in our case, "MB") will be the first message consumed. The
-        #  next tasks to be executed will be those that are scheduled between
-        #  the timestamps of "MB" and "MC" (again: lower bound exclusive, upper
-        #  bound inclusive): T6 and T7.
+        # In this example, when we are assigned the partition, the state is set
+        # to ``None``. After consuming Message A ("MA"), the partition state
+        # becomes ``(None, MA)``. No tasks will have yet been executed.
+        #
+        # When Message B is consumed, the partition state becomes be ``(MA,
+        # MB)``. At this point, T4 and T5 (the tasks that are scheduled between
+        # the timestamps of messages "MA" and "MB") will be included in the
+        # ``TaskSet`` returned by the ``poll`` call. T3 will not be included,
+        # since it was presumably contained within a ``TaskSet`` instance
+        # returned by a previous ``poll`` call. The lower bound ("MA" in this
+        # case) is exclusive, while the upper bound ("MB") is inclusive.
+        #
+        # When all tasks in the ``TaskSet`` have been successfully evaluated,
+        # committing the task set will commit the *lower bound* offset of this
+        # task set. The lower bound is selected so that on consumer restart or
+        # rebalance, the message that has an offset greater than the lower
+        # bound (in our case, "MB") will be the first message consumed. The
+        # next tasks to be executed will be those that are scheduled between
+        # the timestamps of "MB" and "MC" (again: lower bound exclusive, upper
+        # bound inclusive): T6 and T7.
         self.__partitions: MutableMapping[int, Optional[PartitionState]] = {}
-
         self.__consumer = KafkaConsumer(configuration)
         self.__consumer.subscribe(
             [topic], on_assign=self.__on_assign, on_revoke=self.__on_revoke
