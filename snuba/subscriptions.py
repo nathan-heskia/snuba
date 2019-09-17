@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
 from concurrent.futures import Future, as_completed
 from typing import (
     Any,
@@ -9,15 +12,12 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
-    Tuple,
     TypeVar,
-    Union,
 )
 
 from confluent_kafka import (
     TIMESTAMP_LOG_APPEND_TIME,
     Consumer,
-    KafkaConsumer,
     TopicPartition,
 )
 
@@ -40,7 +40,12 @@ class Task(NamedTuple):
     query: Query
 
 
-class TaskSet:
+class TaskSet(ABC):
+    @abstractmethod
+    def __bool__(self) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
     def __iter__(self) -> Iterator[Task]:
         raise NotImplementedError
 
@@ -48,22 +53,20 @@ class TaskSet:
 TTaskSet = TypeVar('TTaskSet', bound=TaskSet)
 
 
-class Scheduler(Generic[TTaskSet]):
+class Scheduler(Generic[TTaskSet], ABC):
+    @abstractmethod
     def poll(self, timeout: Optional[float] = None) -> Optional[TTaskSet]:
         """
         Poll to see if any tasks are ready to execute.
         """
         raise NotImplementedError
 
-    def commit(self, tasks: TTaskSet):
+    @abstractmethod
+    def done(self, tasks: TTaskSet) -> None:
         """
         Mark all tasks within the task set as completed.
         """
         raise NotImplementedError
-
-
-class KafkaTaskSet(TaskSet):
-    pass
 
 
 class Position(NamedTuple):
@@ -71,9 +74,39 @@ class Position(NamedTuple):
     timestamp: float
 
 
+class Interval(NamedTuple):
+    lower: Optional[Position]
+    upper: Position
+
+    def shift(self, upper: Position) -> Interval:
+        # TODO: It probably makes sense to warn or throw if lower > upper.
+        return Interval(self.upper, upper)
+
+
 class PartitionState(NamedTuple):
-    previous: Optional[Position]
-    current: Position
+    interval: Optional[Interval]
+    paused: bool = False
+
+
+class KafkaTaskSet(TaskSet):
+    def __init__(self, partition: int, interval: Interval, tasks: Sequence[Task]):
+        self.__partition = partition
+        self.__interval = interval
+        self.__tasks = tasks
+
+    @property
+    def partition(self) -> int:
+        return self.__partition
+
+    @property
+    def interval(self) -> Interval:
+        return self.__interval
+
+    def __bool__(self) -> bool:
+        return bool(self.__tasks)
+
+    def __iter__(self) -> Iterator[Task]:
+        return iter(self.__tasks)
 
 
 class KafkaScheduler(Scheduler[KafkaTaskSet]):
@@ -117,8 +150,9 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
         # next tasks to be executed will be those that are scheduled between
         # the timestamps of "MB" and "MC" (again: lower bound exclusive, upper
         # bound inclusive): T6 and T7.
-        self.__partitions: MutableMapping[int, Optional[PartitionState]] = {}
-        self.__consumer = KafkaConsumer(configuration)
+        self.__partitions: MutableMapping[int, PartitionState] = {}
+
+        self.__consumer = Consumer(configuration)
         self.__consumer.subscribe(
             [topic], on_assign=self.__on_assign, on_revoke=self.__on_revoke
         )
@@ -128,7 +162,7 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
     ) -> None:
         for tp in assignment:
             if tp.partition not in self.__partitions:
-                self.__partitions[tp.partition] = None
+                self.__partitions[tp.partition] = PartitionState(None)
 
     def __on_revoke(
         self, consumer: Consumer, assignment: Sequence[TopicPartition]
@@ -137,6 +171,10 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
             del self.__partitions[tp.partition]
 
     def poll(self, timeout: Optional[float] = None) -> Optional[KafkaTaskSet]:
+        # TODO: If all partitions are paused, this should probably raise an
+        # error? Or will commit be able to occur via a separate thread, in
+        # which cause this should then set an event/condition variable?
+
         # TODO: Actually respect the `timeout` parameter.
         while True:
             message = self.__consumer.poll()
@@ -151,32 +189,44 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
             assert timestamp_type == TIMESTAMP_LOG_APPEND_TIME
 
             partition = message.partition()
-            assert partition in self.__partitions
-
             state = self.__partitions[partition]
+            assert not state.paused
+
             position = Position(message.offset(), timestamp / 1000.0)
-            if state is None:
-                state = PartitionState(None, position)
+            if state.interval is None:
+                interval = Interval(None, position)
             else:
-                state = PartitionState(state.current, position)
-                # TODO: Create ``TaskSet`` with tasks between timestamps.
-                # TODO: Pause partition consumption.
+                interval = state.interval.shift(position)
 
-            self.__partitions[partition] = state
+            tasks: Optional[KafkaTaskSet] = None
+            if interval.lower is not None:
+                # TODO: Get tasks that are scheduled between the interval.
+                tasks = KafkaTaskSet(partition, interval, [])
+                # NOTE: Empty task sets can/should be allowed to stage their offsets for
+                # commit here.
 
-    def commit(self, tasks: KafkaTaskSet):
-        # TODO: This should also unlock the partition.
-        # If the scheduler is stateful, this enables marking a collection of
-        # tasks as done (for example, if we are using a Kafka partition
-        # timestamp advancing as a "clock" rather than the system/wall clock,
-        # this allows for committing that offset after all of the tasks
-        # scheduled for that point have been completed.)
+            state = self.__partitions[partition] = PartitionState(interval, bool(tasks))
+            if state.paused:
+                self.__consumer.pause([TopicPartition(self.__topic, partition)])
+
+            if tasks:
+                return tasks
+
+    def done(self, tasks: KafkaTaskSet) -> None:
+        partition = tasks.partition
+
+        state = self.__partitions[partition]
+        assert state.interval == tasks.interval
+
+        self.__partitions[partition] = PartitionState(state.interval, False)
+        self.__consumer.resume([TopicPartition(self.__topic, partition)])
+
         # TODO: This probably could use a better return type.
-        raise NotImplementedError
+        # TODO: This should stage offsets for commit.
 
 
 class Executor:
-    def submit(self, queries: Iterable[Query]) -> Iterator[Future[Result]]:
+    def submit(self, queries: Iterable[Query]) -> Iterator['Future[Result]']:
         """
         Run a collection of queries as efficiently as possible.
         """
@@ -190,7 +240,7 @@ class Executor:
 
 
 class Producer:
-    def produce(self, task: Task, result: Result) -> Future[None]:
+    def produce(self, task: Task, result: Result) -> 'Future[None]':
         """
         Produce the result of a task.
         """
@@ -230,4 +280,4 @@ if __name__ == "__main__":
                 # TODO: What should we do on a failure to publish results?
                 producer.produce(task, result).result()
 
-        scheduler.commit(tasks)
+        scheduler.done(tasks)
