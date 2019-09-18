@@ -15,11 +15,7 @@ from typing import (
     TypeVar,
 )
 
-from confluent_kafka import (
-    TIMESTAMP_LOG_APPEND_TIME,
-    Consumer,
-    TopicPartition,
-)
+from confluent_kafka import TIMESTAMP_LOG_APPEND_TIME, Consumer, TopicPartition
 
 
 # TODO: Synchronize these types with the Reader interface.
@@ -50,7 +46,7 @@ class TaskSet(ABC):
         raise NotImplementedError
 
 
-TTaskSet = TypeVar('TTaskSet', bound=TaskSet)
+TTaskSet = TypeVar("TTaskSet", bound=TaskSet)
 
 
 class Scheduler(Generic[TTaskSet], ABC):
@@ -81,11 +77,6 @@ class Interval(NamedTuple):
     def shift(self, upper: Position) -> Interval:
         # TODO: It probably makes sense to warn or throw if lower > upper.
         return Interval(self.upper, upper)
-
-
-class PartitionState(NamedTuple):
-    interval: Optional[Interval]
-    paused: bool = False
 
 
 class KafkaTaskSet(TaskSet):
@@ -150,7 +141,7 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
         # next tasks to be executed will be those that are scheduled between
         # the timestamps of "MB" and "MC" (again: lower bound exclusive, upper
         # bound inclusive): T6 and T7.
-        self.__partitions: MutableMapping[int, PartitionState] = {}
+        self.__partitions: MutableMapping[int, Optional[Interval]] = {}
 
         self.__consumer = Consumer(configuration)
         self.__consumer.subscribe(
@@ -162,7 +153,7 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
     ) -> None:
         for tp in assignment:
             if tp.partition not in self.__partitions:
-                self.__partitions[tp.partition] = PartitionState(None)
+                self.__partitions[tp.partition] = None
 
     def __on_revoke(
         self, consumer: Consumer, assignment: Sequence[TopicPartition]
@@ -189,44 +180,50 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
             assert timestamp_type == TIMESTAMP_LOG_APPEND_TIME
 
             partition = message.partition()
-            state = self.__partitions[partition]
-            assert not state.paused
+            interval = self.__partitions[partition]
 
             position = Position(message.offset(), timestamp / 1000.0)
-            if state.interval is None:
+            if interval is None:
                 interval = Interval(None, position)
             else:
-                interval = state.interval.shift(position)
+                interval = interval.shift(position)
 
             tasks: Optional[KafkaTaskSet] = None
             if interval.lower is not None:
                 # TODO: Get tasks that are scheduled between the interval.
                 tasks = KafkaTaskSet(partition, interval, [])
-                # NOTE: Empty task sets can/should be allowed to stage their offsets for
-                # commit here.
 
-            state = self.__partitions[partition] = PartitionState(interval, bool(tasks))
-            if state.paused:
-                self.__consumer.pause([TopicPartition(self.__topic, partition)])
+            self.__partitions[partition] = interval
 
             if tasks:
+                # If there are tasks to execute during this interval, we need
+                # return them so that they can be executed, and pause
+                # additional consumption on that partition so that tasks are not . Storing the offsets
+                # for commit will happen when the tasks are completed.
+                self.__consumer.pause([TopicPartition(self.__topic, partition)])
                 return tasks
+            else:
+                # If there are no tasks to execute during this interval, we can
+                # stage our upper bound offset for commit.
+                self.__consumer.store_offsets(
+                    offsets=[TopicPartition(self.__topic, partition, interval.upper)]
+                )
 
     def done(self, tasks: KafkaTaskSet) -> None:
-        partition = tasks.partition
+        assert self.__partitions[tasks.partition] == tasks.interval
 
-        state = self.__partitions[partition]
-        assert state.interval == tasks.interval
+        # N.B.: ``store_offset``'s handling of offset values differs from that
+        # of ``commit``! The offset passed to ``store_offset`` will be the
+        # offset of the first message read when the consumer restarts.
+        self.__consumer.store_offsets(
+            offsets=[TopicPartition(self.__topic, tasks.partition, tasks.interval.upper)]
+        )
 
-        self.__partitions[partition] = PartitionState(state.interval, False)
-        self.__consumer.resume([TopicPartition(self.__topic, partition)])
-
-        # TODO: This probably could use a better return type.
-        # TODO: This should stage offsets for commit.
+        self.__consumer.resume([TopicPartition(self.__topic, tasks.partition)])
 
 
 class Executor:
-    def submit(self, queries: Iterable[Query]) -> Iterator['Future[Result]']:
+    def submit(self, queries: Iterable[Query]) -> Iterator["Future[Result]"]:
         """
         Run a collection of queries as efficiently as possible.
         """
@@ -240,7 +237,7 @@ class Executor:
 
 
 class Producer:
-    def produce(self, task: Task, result: Result) -> 'Future[None]':
+    def produce(self, task: Task, result: Result) -> "Future[None]":
         """
         Produce the result of a task.
         """
