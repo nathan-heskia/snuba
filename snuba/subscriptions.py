@@ -205,9 +205,8 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
             else:
                 # If there are no tasks to execute during this interval, we can
                 # stage our upper bound offset for commit.
-                self.__consumer.store_offsets(
-                    offsets=[TopicPartition(self.__topic, partition, interval.upper)]
-                )
+                # XXX: Should this just be returned to the consumer in both cases?
+                self.done(tasks)
 
     def done(self, tasks: KafkaTaskSet) -> None:
         assert self.__partitions[tasks.partition] == tasks.interval
@@ -219,7 +218,8 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
             offsets=[TopicPartition(self.__topic, tasks.partition, tasks.interval.upper)]
         )
 
-        self.__consumer.resume([TopicPartition(self.__topic, tasks.partition)])
+        if tasks:
+            self.__consumer.resume([TopicPartition(self.__topic, tasks.partition)])
 
 
 class Executor:
