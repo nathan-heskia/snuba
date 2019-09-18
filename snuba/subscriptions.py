@@ -38,10 +38,6 @@ class Task(NamedTuple):
 
 class TaskSet(ABC):
     @abstractmethod
-    def __bool__(self) -> bool:
-        raise NotImplementedError
-
-    @abstractmethod
     def __iter__(self) -> Iterator[Task]:
         raise NotImplementedError
 
@@ -92,9 +88,6 @@ class KafkaTaskSet(TaskSet):
     @property
     def interval(self) -> Interval:
         return self.__interval
-
-    def __bool__(self) -> bool:
-        return bool(self.__tasks)
 
     def __iter__(self) -> Iterator[Task]:
         return iter(self.__tasks)
