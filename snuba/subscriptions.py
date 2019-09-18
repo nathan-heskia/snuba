@@ -165,48 +165,33 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
         # TODO: If all partitions are paused, this should probably raise an
         # error? Or will commit be able to occur via a separate thread, in
         # which cause this should then set an event/condition variable?
+        message = self.__consumer.poll(timeout)
+        if message is None:
+            return None
 
-        # TODO: Actually respect the `timeout` parameter.
-        while True:
-            message = self.__consumer.poll()
-            if message is None:
-                continue
+        error = message.error()
+        if error is not None:
+            raise error
 
-            error = message.error()
-            if error is not None:
-                raise error
+        timestamp_type, timestamp = message.timestamp()
+        assert timestamp_type == TIMESTAMP_LOG_APPEND_TIME
 
-            timestamp_type, timestamp = message.timestamp()
-            assert timestamp_type == TIMESTAMP_LOG_APPEND_TIME
+        position = Position(message.offset(), timestamp / 1000.0)
 
-            partition = message.partition()
-            interval = self.__partitions[partition]
+        interval = self.__partitions[message.partition()]
 
-            position = Position(message.offset(), timestamp / 1000.0)
-            if interval is None:
-                interval = Interval(None, position)
-            else:
-                interval = interval.shift(position)
+        if interval is None:
+            interval = Interval(None, position)
+        else:
+            interval = interval.shift(position)
 
-            tasks: Optional[KafkaTaskSet] = None
-            if interval.lower is not None:
-                # TODO: Get tasks that are scheduled between the interval.
-                tasks = KafkaTaskSet(partition, interval, [])
+        self.__partitions[message.partition()] = interval
 
-            self.__partitions[partition] = interval
+        if interval.lower is None:
+            return None
 
-            if tasks:
-                # If there are tasks to execute during this interval, we need
-                # return them so that they can be executed, and pause
-                # additional consumption on that partition so that tasks are not . Storing the offsets
-                # for commit will happen when the tasks are completed.
-                self.__consumer.pause([TopicPartition(self.__topic, partition)])
-                return tasks
-            else:
-                # If there are no tasks to execute during this interval, we can
-                # stage our upper bound offset for commit.
-                # XXX: Should this just be returned to the consumer in both cases?
-                self.done(tasks)
+        # TODO: Get tasks that are scheduled between the interval.
+        return KafkaTaskSet(message.partition(), interval, [])
 
     def done(self, tasks: KafkaTaskSet) -> None:
         assert self.__partitions[tasks.partition] == tasks.interval
@@ -215,11 +200,10 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
         # of ``commit``! The offset passed to ``store_offset`` will be the
         # offset of the first message read when the consumer restarts.
         self.__consumer.store_offsets(
-            offsets=[TopicPartition(self.__topic, tasks.partition, tasks.interval.upper)]
+            offsets=[
+                TopicPartition(self.__topic, tasks.partition, tasks.interval.upper)
+            ]
         )
-
-        if tasks:
-            self.__consumer.resume([TopicPartition(self.__topic, tasks.partition)])
 
 
 class Executor:
