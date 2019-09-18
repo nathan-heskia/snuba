@@ -155,9 +155,6 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
             del self.__partitions[tp.partition]
 
     def poll(self, timeout: Optional[float] = None) -> Optional[KafkaTaskSet]:
-        # TODO: If all partitions are paused, this should probably raise an
-        # error? Or will commit be able to occur via a separate thread, in
-        # which cause this should then set an event/condition variable?
         message = self.__consumer.poll(timeout)
         if message is None:
             return None
@@ -169,17 +166,14 @@ class KafkaScheduler(Scheduler[KafkaTaskSet]):
         timestamp_type, timestamp = message.timestamp()
         assert timestamp_type == TIMESTAMP_LOG_APPEND_TIME
 
-        position = Position(message.offset(), timestamp / 1000.0)
-
         interval = self.__partitions[message.partition()]
+        position = Position(message.offset(), timestamp / 1000.0)
+        self.__partitions[message.partition()] = (
+            interval.shift(position) if interval else Interval(None, position)
+        )
 
-        if interval is None:
-            interval = Interval(None, position)
-        else:
-            interval = interval.shift(position)
-
-        self.__partitions[message.partition()] = interval
-
+        # If there is no lower bound (we've only received one message) we can't
+        # figure out what tasks were scheduled between those two messages.
         if interval.lower is None:
             return None
 
