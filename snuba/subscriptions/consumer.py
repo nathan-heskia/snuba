@@ -25,7 +25,7 @@ from snuba.utils.kafka.configuration import (
     get_bool_configuration_value,
     get_enum_configuration_value,
 )
-from snuba.utils.kafka.consumer import Consumer
+from snuba.utils.kafka.consumers.abstract import Consumer
 
 
 logger = logging.getLogger(__name__)
