@@ -7,7 +7,8 @@ from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka import Message as ConfluentMessage
 from confluent_kafka import TopicPartition as ConfluentTopicPartition
 
-from snuba.utils.streams.abstract import Consumer, ConsumerError, EndOfStream, Message
+from snuba.utils.codecs import Decoder
+from snuba.utils.streams.abstract import Consumer, ConsumerError, EndOfStream, Message, TValue
 
 
 logger = logging.getLogger(__name__)
@@ -18,16 +19,17 @@ class TopicPartition(NamedTuple):
     partition: int
 
 
-KafkaMessage = Message[TopicPartition, int, bytes]
+KafkaMessage = Message[TopicPartition, int, TValue]
 
 
 class TransportError(ConsumerError):
     pass
 
 
-class KafkaConsumer(Consumer[TopicPartition, int, bytes]):
-    def __init__(self, configuration: Mapping[str, Any]) -> None:
+class KafkaConsumer(Consumer[TopicPartition, int, TValue]):
+    def __init__(self, configuration: Mapping[str, Any], decoder: Decoder[bytes, TValue]) -> None:
         self.__consumer = ConfluentConsumer(configuration)
+        self.__decoder = decoder
 
     def __wrap_assignment_callback(
         self, callback: Callable[[Sequence[TopicPartition]], None]
@@ -57,7 +59,7 @@ class KafkaConsumer(Consumer[TopicPartition, int, bytes]):
 
         self.__consumer.subscribe(topics, **kwargs)
 
-    def poll(self, timeout: Optional[float] = None) -> Optional[KafkaMessage]:
+    def poll(self, timeout: Optional[float] = None) -> Optional[KafkaMessage[TValue]]:
         message: Optional[ConfluentMessage] = self.__consumer.poll(
             *[timeout] if timeout is not None else []
         )
@@ -77,7 +79,7 @@ class KafkaConsumer(Consumer[TopicPartition, int, bytes]):
         return KafkaMessage(
             TopicPartition(message.topic(), message.partition()),
             message.offset(),
-            message.value(),
+            self.__decoder.decode(message.value()),
         )
 
     def commit(self) -> Mapping[TopicPartition, int]:
@@ -120,13 +122,18 @@ DEFAULT_QUEUED_MAX_MESSAGE_KBYTES = 50000
 DEFAULT_QUEUED_MIN_MESSAGES = 10000
 
 
+class SimpleDecoder(Decoder[bytes, bytes]):
+    def decode(self, input: bytes) -> bytes:
+        return input
+
+
 def build_kafka_consumer(
     bootstrap_servers: Sequence[str],
     group_id: str,
     auto_offset_reset: str = "error",
     queued_max_messages_kbytes: int = DEFAULT_QUEUED_MAX_MESSAGE_KBYTES,
     queued_min_messages: int = DEFAULT_QUEUED_MIN_MESSAGES,
-) -> KafkaConsumer:
+) -> KafkaConsumer[bytes]:
     return KafkaConsumer(
         {
             "enable.auto.commit": False,
@@ -137,5 +144,6 @@ def build_kafka_consumer(
             "queued.max.messages.kbytes": queued_max_messages_kbytes,
             "queued.min.messages": queued_min_messages,
             "enable.partition.eof": False,
-        }
+        },
+        SimpleDecoder(),
     )
