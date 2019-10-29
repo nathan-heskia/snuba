@@ -86,33 +86,6 @@ class Consumer(ABC, Generic[TStream, TOffset, TValue]):
     """
 
     @abstractmethod
-    def subscribe(
-        self,
-        topics: Sequence[str],
-        on_assign: Optional[Callable[[Sequence[TStream]], None]] = None,
-        on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
-    ) -> None:
-        """
-        Subscribe to topic streams. This replaces a previous subscription.
-        This method does not block. The subscription may not be fulfilled
-        immediately: instead, the ``on_assign`` and ``on_revoke`` callbacks
-        are called when the subscription state changes with the updated
-        assignment for this consumer.
-
-        Raises a ``RuntimeError`` if called on a closed consumer.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def unsubscribe(self) -> None:
-        """
-        Unsubscribe from streams.
-
-        Raises a ``RuntimeError`` if called on a closed consumer.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def poll(
         self, timeout: Optional[float] = None
     ) -> Optional[Message[TStream, TOffset, TValue]]:
@@ -143,6 +116,15 @@ class Consumer(ABC, Generic[TStream, TOffset, TValue]):
         configured to raise in this scenario.
 
         Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def assignment(self) -> Sequence[TStream]:
+        """
+        Return the current stream assignment.
+
+        Raises a ``RuntimeError`` if called a closed consumer.
         """
         raise NotImplementedError
 
@@ -184,5 +166,58 @@ class Consumer(ABC, Generic[TStream, TOffset, TValue]):
 
         Raises a ``TimeoutError`` if the consumer is unable to be closed
         before the timeout is reached.
+        """
+        raise NotImplementedError
+
+
+class BalancedConsumer(Consumer[TStream, TOffset, TValue]):
+
+    @abstractmethod
+    def subscribe(
+        self,
+        topics: Sequence[str],
+        on_assign: Optional[Callable[[Sequence[TStream]], None]] = None,
+        on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
+    ) -> None:
+        """
+        Subscribe to topic streams. This replaces a previous subscription.
+        This method does not block. The subscription may not be fulfilled
+        immediately: instead, the ``on_assign`` and ``on_revoke`` callbacks
+        are called when the subscription state changes with the updated
+        assignment for this consumer.
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def unsubscribe(self) -> None:
+        """
+        Unsubscribe from streams.
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        raise NotImplementedError
+
+
+class ManagedConsumer(Consumer[TStream, TOffset, TValue]):
+
+    @abstractmethod
+    def assign(self, streams: Sequence[TStream]) -> None:
+        """
+        Assign streams to this consumer. This replaces the previous
+        assignment, if one exists.
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        # TODO: This likely will need to handle starting offsets as well.
+        raise NotImplementedError
+
+    @abstractmethod
+    def unassign(self) -> None:
+        """
+        Remove this consumer's stream assignments.
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
         """
         raise NotImplementedError
