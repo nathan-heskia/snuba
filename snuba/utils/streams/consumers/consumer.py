@@ -1,7 +1,10 @@
+from dataclasses import dataclass
 from typing import Callable, Generic, Mapping, Optional, Sequence
 
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
 from snuba.utils.streams.consumers.types import Message, TStream, TOffset, TValue
+from snuba.utils.streams.producers.producer import Producer
+from snuba.utils.streams.producers.types import TStream as TProducerStream
 
 
 class Consumer(Generic[TStream, TOffset, TValue]):
@@ -120,3 +123,49 @@ class Consumer(Generic[TStream, TOffset, TValue]):
         before the timeout is reached.
         """
         return self.__backend.close()
+
+
+@dataclass(frozen=True)
+class CommitMessage(Generic[TStream, TOffset]):
+    consumer: str
+    stream: TStream
+    offset: TOffset
+
+
+class ConsumerWithCommitLog(Consumer[TStream, TOffset, TValue]):
+    def __init__(
+        self,
+        backend: ConsumerBackend[TStream, TOffset, TValue],
+        producer: Producer[TProducerStream, CommitMessage[TStream, TOffset]],
+        commit_log: TProducerStream,
+    ) -> None:
+        super().__init__(backend)
+        self.__producer = producer
+        self.__commit_log = commit_log
+
+    def poll(
+        self, timeout: Optional[float] = None
+    ) -> Optional[Message[TStream, TOffset, TValue]]:
+        self.__producer.poll(0.0)
+        return super().poll(timeout)
+
+    def commit(self) -> Mapping[TStream, TOffset]:
+        offsets = super().commit()
+
+        for stream, offset in offsets.items():
+            self.__producer.produce(
+                self.__commit_log,
+                CommitMessage(
+                    "group", stream, offset  # XXX: Where does group come from?
+                ),
+            )
+
+        return offsets
+
+    def close(self, timeout: Optional[float] = None) -> None:
+        super().close(timeout)
+        # TODO: This isn't correct -- this can cause the timeout to be doubled,
+        # this needs to do math before it's ready.
+        messages = self.__producer.flush(timeout)
+        if messages > 0:
+            raise TimeoutError(f"{messages} commit log messages pending delivery")
