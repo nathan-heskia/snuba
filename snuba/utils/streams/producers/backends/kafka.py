@@ -11,7 +11,6 @@ class TopicPartition(NamedTuple):
 
 
 class KafkaProducerBackend(ProducerBackend[TopicPartition, bytes]):
-
     def __init__(self, configuration: Mapping[str, Any]) -> None:
         self.__producer = Producer(configuration)
 
@@ -22,7 +21,7 @@ class KafkaProducerBackend(ProducerBackend[TopicPartition, bytes]):
     def produce(self, stream: TopicPartition, value: bytes) -> None:
         kwargs = {}
         if stream.partition is not None:
-            kwargs['partition'] = stream.partition
+            kwargs["partition"] = stream.partition
         self.__producer.produce(stream.topic, value, **kwargs)
         return None
 

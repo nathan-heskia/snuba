@@ -5,7 +5,6 @@ from snuba.utils.streams.producers.types import TStream, TValue
 
 
 class ProducerBackend(ABC, Generic[TStream, TValue]):
-
     @abstractmethod
     def poll(self, timeout: Optional[float] = None) -> None:
         raise NotImplementedError

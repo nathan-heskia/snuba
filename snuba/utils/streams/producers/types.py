@@ -1,6 +1,6 @@
 from typing import TypeVar
 
 
-TStream = TypeVar('TStream')
+TStream = TypeVar("TStream")
 
-TValue = TypeVar('TValue')
+TValue = TypeVar("TValue")
