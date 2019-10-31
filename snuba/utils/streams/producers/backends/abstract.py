@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Generic
+from typing import Generic, Optional
 
 from snuba.utils.streams.producers.types import TStream, TValue
 
@@ -11,5 +11,5 @@ class ProducerBackend(ABC, Generic[TStream, TValue]):
         raise NotImplementedError
 
     @abstractmethod
-    def flush(self) -> int:
+    def flush(self, timeout: Optional[float] = None) -> int:
         raise NotImplementedError

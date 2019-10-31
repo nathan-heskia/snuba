@@ -1,4 +1,4 @@
-from typing import Generic
+from typing import Optional, Generic
 
 from snuba.utils.streams.producers.backends.abstract import ProducerBackend
 from snuba.utils.streams.producers.types import TStream, TValue
@@ -11,5 +11,5 @@ class Producer(Generic[TStream, TValue]):
     def produce(self, stream: TStream, value: TValue) -> None:
         return self.__backend.produce(stream, value)
 
-    def flush(self) -> int:
-        return self.__backend.flush()
+    def flush(self, timeout: Optional[float] = None) -> int:
+        return self.__backend.flush(timeout)

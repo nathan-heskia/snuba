@@ -22,6 +22,6 @@ class KafkaProducerBackend(ProducerBackend[TopicPartition, bytes]):
         self.__producer.produce(stream.topic, value, **kwargs)
         return None
 
-    def flush(self) -> int:
-        size: int = self.__producer.flush()
+    def flush(self, timeout: Optional[float] = None) -> int:
+        size: int = self.__producer.flush(*[timeout] if timeout is not None else [])
         return size
