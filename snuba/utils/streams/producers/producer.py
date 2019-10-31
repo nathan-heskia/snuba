@@ -8,6 +8,9 @@ class Producer(Generic[TStream, TValue]):
     def __init__(self, backend: ProducerBackend[TStream, TValue]):
         self.__backend = backend
 
+    def poll(self, timeout: Optional[float] = None) -> None:
+        return self.__backend.poll(timeout)
+
     def produce(self, stream: TStream, value: TValue) -> None:
         return self.__backend.produce(stream, value)
 

@@ -15,6 +15,10 @@ class KafkaProducerBackend(ProducerBackend[TopicPartition, bytes]):
     def __init__(self, configuration: Mapping[str, Any]) -> None:
         self.__producer = Producer(configuration)
 
+    def poll(self, timeout: Optional[float] = None) -> None:
+        self.__producer.poll(*[timeout] if timeout is not None else [])
+        return None
+
     def produce(self, stream: TopicPartition, value: bytes) -> None:
         kwargs = {}
         if stream.partition is not None:
