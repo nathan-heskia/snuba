@@ -91,6 +91,14 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
     )
 
     def __init__(self, configuration: Mapping[str, Any]) -> None:
+        if configuration.get("enable.auto.offset.store", "true") != "false":
+            raise ValueError(
+                "invalid value for 'enable.auto.offset.store' configuration"
+            )
+
+        if configuration.get("enable.auto.commit", "true") != "false":
+            raise ValueError("invalid value for 'auto.offset.store' configuration")
+
         auto_offset_reset = configuration.get("auto.offset.reset", "largest")
         if auto_offset_reset in {"smallest", "earliest", "beginning"}:
             self.__resolve_partition_starting_offset = (
@@ -110,7 +118,12 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
         # NOTE: Offsets are explicitly managed as part of the assignment
         # callback, so preemptively resetting offsets is not enabled.
         self.__consumer = ConfluentConsumer(
-            {**configuration, "auto.offset.reset": "error"}
+            {
+                **configuration,
+                "auto.offset.reset": "error",
+                "enable.auto.offset.store": "false",
+                "enable.auto.commit": "false",
+            }
         )
 
         self.__offsets: MutableMapping[TopicPartition, int] = {}
@@ -275,7 +288,9 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
 
         self.__seek(offsets)
 
-    def commit(self) -> Mapping[TopicPartition, int]:
+    def commit_offsets(
+        self, offsets: Mapping[TopicPartition, int]
+    ) -> Mapping[TopicPartition, int]:
         if self.__state in {KafkaConsumerState.CLOSED, KafkaConsumerState.ERROR}:
             raise InvalidState(self.__state)
 
@@ -284,7 +299,13 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
         retries_remaining = 3
         while result is None:
             try:
-                result = self.__consumer.commit(asynchronous=False)
+                result = self.__consumer.commit(
+                    offsets=[
+                        ConfluentTopicPartition(stream.topic, stream.partition, offset)
+                        for stream, offset in offsets.items()
+                    ],
+                    asynchronous=False,
+                )
                 assert result is not None
             except KafkaException as e:
                 if not e.args[0].code() in (
@@ -305,7 +326,7 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
                 retries_remaining -= 1
                 time.sleep(1)
 
-        offsets: MutableMapping[TopicPartition, int] = {}
+        return_offsets: MutableMapping[TopicPartition, int] = {}
 
         for value in result:
             # The Confluent Kafka Consumer will include logical offsets in the
@@ -318,9 +339,9 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
                 continue
 
             assert value.offset >= 0, "expected non-negative offset"
-            offsets[TopicPartition(value.topic, value.partition)] = value.offset
+            return_offsets[TopicPartition(value.topic, value.partition)] = value.offset
 
-        return offsets
+        return return_offsets
 
     def close(self, timeout: Optional[float] = None) -> None:
         try:
@@ -376,10 +397,12 @@ class KafkaConsumerBackendWithCommitLog(KafkaConsumerBackend):
         if error is not None:
             raise Exception(error.str())
 
-    def commit(self) -> Mapping[TopicPartition, int]:
-        offsets = super().commit()
+    def commit_offsets(
+        self, offsets: Mapping[TopicPartition, int]
+    ) -> Mapping[TopicPartition, int]:
+        result = super().commit_offsets(offsets)
 
-        for stream, offset in offsets.items():
+        for stream, offset in result.items():
             self.__producer.produce(
                 self.__commit_log_topic,
                 key="{}:{}:{}".format(
@@ -389,7 +412,7 @@ class KafkaConsumerBackendWithCommitLog(KafkaConsumerBackend):
                 on_delivery=self.__commit_message_delivery_callback,
             )
 
-        return offsets
+        return result
 
     def close(self, timeout: Optional[float] = None) -> None:
         super().close()

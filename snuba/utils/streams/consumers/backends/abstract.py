@@ -104,11 +104,12 @@ class ConsumerBackend(ABC, Generic[TStream, TOffset, TValue]):
         raise NotImplementedError
 
     @abstractmethod
-    def commit(self) -> Mapping[TStream, TOffset]:
+    def commit_offsets(
+        self, offsets: Mapping[TStream, TOffset]
+    ) -> Mapping[TStream, TOffset]:
         """
-        Commit staged offsets for all streams that this consumer is assigned
-        to. The return value of this method is a mapping of streams with
-        their committed offsets as values.
+        Commit offsets. The return value of this method is a mapping of
+        streams with their committed offsets as values.
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
