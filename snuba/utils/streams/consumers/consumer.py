@@ -1,5 +1,6 @@
 from typing import Callable, Generic, Mapping, Optional, Sequence
 
+from snuba.utils.retries import NoRetryPolicy, RetryPolicy
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
 from snuba.utils.streams.consumers.types import Message, TStream, TOffset, TValue
 
@@ -23,8 +24,13 @@ class Consumer(Generic[TStream, TOffset, TValue]):
     that method.
     """
 
-    def __init__(self, backend: ConsumerBackend[TStream, TOffset, TValue]):
+    def __init__(
+        self,
+        backend: ConsumerBackend[TStream, TOffset, TValue],
+        commit_retry_policy: RetryPolicy = NoRetryPolicy(),
+    ):
         self.__backend = backend
+        self.__commit_retry_policy = commit_retry_policy
 
     def subscribe(
         self,
@@ -108,7 +114,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.commit()
+        return self.__commit_retry_policy.call(self.__backend.commit)
 
     def close(self, timeout: Optional[float] = None) -> None:
         """

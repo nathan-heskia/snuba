@@ -1,4 +1,4 @@
-from confluent_kafka import Producer
+from confluent_kafka import KafkaException, KafkaError, Producer
 from typing import Sequence
 
 from snuba import settings, util
@@ -10,6 +10,7 @@ from snuba.stateful_consumer.control_protocol import TransactionData
 from snuba.utils.streams.batching import BatchingConsumer
 from snuba.utils.streams.consumers.consumer import Consumer
 from snuba.utils.streams.consumers.backends.kafka import KafkaConsumerBackend, KafkaConsumerBackendWithCommitLog, TransportError, build_kafka_consumer_configuration
+from snuba.utils.retries import BasicRetryPolicy, constant_delay
 
 
 class ConsumerBuilder:
@@ -99,7 +100,18 @@ class ConsumerBuilder:
             )
 
         return BatchingConsumer(
-            Consumer(backend),
+            Consumer(
+                backend,
+                commit_retry_policy=BasicRetryPolicy(
+                    4,
+                    constant_delay(1),
+                    lambda e: isinstance(e, KafkaException) and e.args[0].code() in (
+                        KafkaError.REQUEST_TIMED_OUT,
+                        KafkaError.NOT_COORDINATOR_FOR_GROUP,
+                        KafkaError._WAIT_COORD,
+                    ),
+                ),
+            ),
             self.raw_topic,
             worker=worker,
             max_batch_size=self.max_batch_size,
