@@ -1,4 +1,12 @@
-from typing import Callable, Generic, Mapping, Optional, Sequence
+from typing import (
+    AbstractSet,
+    Callable,
+    Generic,
+    Mapping,
+    MutableSet,
+    Optional,
+    Sequence,
+)
 
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
 from snuba.utils.streams.consumers.types import Message, TStream, TOffset, TValue
@@ -17,6 +25,14 @@ class Consumer(Generic[TStream, TOffset, TValue]):
     def __init__(self, backend: ConsumerBackend[TStream, TOffset, TValue]):
         self.__backend = backend
 
+        self.__assigned_streams: MutableSet[TStream] = set()
+
+    def assignment(self) -> AbstractSet[TStream]:
+        """
+        Return the set of currently assigned streams.
+        """
+        return self.__assigned_streams
+
     def subscribe(
         self,
         topics: Sequence[str],
@@ -32,7 +48,27 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.subscribe(topics, on_assign, on_revoke)
+
+        def assignment_callback(streams: Sequence[TStream]) -> None:
+            for stream in streams:
+                self.__assigned_streams.add(stream)
+
+            if on_assign is not None:
+                on_assign(streams)
+
+        def revocation_callback(streams: Sequence[TStream]) -> None:
+            for stream in streams:
+                # XXX: If this throws a ``KeyError``, that means that the local
+                # assignment state was incorrect (e.g. the assignment callback
+                # was never invoked, or didn't include this stream for some reason.)
+                self.__assigned_streams.remove(stream)
+
+            if on_revoke is not None:
+                on_revoke(streams)
+
+        return self.__backend.subscribe(
+            topics, assignment_callback, revocation_callback
+        )
 
     def unsubscribe(self) -> None:
         """
@@ -73,7 +109,9 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.poll(timeout)
+        message = self.__backend.poll(timeout)
+        assert message is None or message.stream in self.__assigned_streams
+        return message
 
     def tell(self) -> Mapping[TStream, TOffset]:
         """
@@ -81,14 +119,25 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.tell()
+        offsets = self.__backend.tell()
+        assert not offsets.keys() - self.__assigned_streams
+        return offsets
 
     def seek(self, offsets: Mapping[TStream, TOffset]) -> None:
         """
         Change the read offsets for the provided streams.
 
+        Raises a ``ValueError`` if the offsets mapping includes one or more
+        sets that are not currently assigned to this consumer.
+
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
+        unassigned_streams = offsets.keys() - self.__assigned_streams
+        if unassigned_streams:
+            raise ValueError(
+                f"cannot call seek with unassigned streams: {unassigned_streams!r}"
+            )
+
         return self.__backend.seek(offsets)
 
     def commit(self) -> Mapping[TStream, TOffset]:
@@ -99,7 +148,9 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.commit()
+        offsets = self.__backend.commit()
+        assert not offsets.keys() - self.__assigned_streams
+        return offsets
 
     def close(self, timeout: Optional[float] = None) -> None:
         """
