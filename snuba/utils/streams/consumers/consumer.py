@@ -1,7 +1,11 @@
-from typing import Callable, Generic, Mapping, Optional, Sequence
+from typing import Callable, Generic, Mapping, Optional, Sequence, cast
 
 from snuba.utils.retries import NoRetryPolicy, RetryPolicy
-from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
+from snuba.utils.streams.consumers.backends.abstract import (
+    ConsumerBackend,
+    BalancedConsumerBackend,
+    ManagedConsumerBackend,
+)
 from snuba.utils.streams.consumers.types import Message, TStream, TOffset, TValue
 
 
@@ -25,40 +29,6 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         self.__backend = backend
         self.__commit_retry_policy = commit_retry_policy
-
-    def subscribe(
-        self,
-        topics: Sequence[str],
-        on_assign: Optional[Callable[[Mapping[TStream, TOffset]], None]] = None,
-        on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
-    ) -> None:
-        """
-        Subscribe to topic streams. This replaces a previous subscription.
-        This method does not block. The subscription may not be fulfilled
-        immediately: instead, the ``on_assign`` and ``on_revoke`` callbacks
-        are called when the subscription state changes with the updated
-        assignment for this consumer.
-
-        If provided, the ``on_assign`` callback is called with a mapping of
-        streams to their offsets (at this point, the working offset and the
-        committed offset are the same for each stream) on each subscription
-        change. Similarly, the ``on_revoke`` callback (if provided) is called
-        with a sequence of streams that are being removed from this
-        consumer's assignment. (This callback does not include the offsets,
-        as the working offset and committed offset may differ, in some cases
-        by substantial margin.)
-
-        Raises a ``RuntimeError`` if called on a closed consumer.
-        """
-        return self.__backend.subscribe(topics, on_assign, on_revoke)
-
-    def unsubscribe(self) -> None:
-        """
-        Unsubscribe from streams.
-
-        Raises a ``RuntimeError`` if called on a closed consumer.
-        """
-        return self.__backend.unsubscribe()
 
     def poll(
         self, timeout: Optional[float] = None
@@ -145,3 +115,69 @@ class Consumer(Generic[TStream, TOffset, TValue]):
         before the timeout is reached.
         """
         return self.__backend.close()
+
+
+class BalancedConsumer(Consumer[TStream, TOffset, TValue]):
+    def __init__(
+        self,
+        backend: BalancedConsumerBackend[TStream, TOffset, TValue],
+        commit_retry_policy: Optional[RetryPolicy] = None,
+    ):
+        super().__init__(backend, commit_retry_policy)
+
+    def subscribe(
+        self,
+        topics: Sequence[str],
+        on_assign: Optional[Callable[[Mapping[TStream, TOffset]], None]] = None,
+        on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
+    ) -> None:
+        """
+        Subscribe to topic streams. This replaces a previous subscription.
+        This method does not block. The subscription may not be fulfilled
+        immediately: instead, the ``on_assign`` and ``on_revoke`` callbacks
+        are called when the subscription state changes with the updated
+        assignment for this consumer.
+
+        If provided, the ``on_assign`` callback is called with a mapping of
+        streams to their offsets (at this point, the working offset and the
+        committed offset are the same for each stream) on each subscription
+        change. Similarly, the ``on_revoke`` callback (if provided) is called
+        with a sequence of streams that are being removed from this
+        consumer's assignment. (This callback does not include the offsets,
+        as the working offset and committed offset may differ, in some cases
+        by substantial margin.)
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        return cast(
+            BalancedConsumerBackend[TStream, TOffset, TValue], self.__backend
+        ).subscribe(topics, on_assign, on_revoke)
+
+    def unsubscribe(self) -> None:
+        """
+        Unsubscribe from streams.
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        return cast(
+            BalancedConsumerBackend[TStream, TOffset, TValue], self.__backend
+        ).unsubscribe()
+
+
+class ManagedConsumer(Consumer[TStream, TOffset, TValue]):
+    def __init__(
+        self,
+        backend: ManagedConsumerBackend[TStream, TOffset, TValue],
+        commit_retry_policy: Optional[RetryPolicy] = None,
+    ):
+        super().__init__(backend, commit_retry_policy)
+
+    def assign(self, streams: Mapping[TStream, Optional[TOffset]]) -> None:
+        return cast(
+            ManagedConsumerBackend[TStream, TOffset, TValue], self.__backend
+        ).assign(streams)
+
+    def unassign(self) -> None:
+        return cast(
+            ManagedConsumerBackend[TStream, TOffset, TValue], self.__backend
+        ).unassign()

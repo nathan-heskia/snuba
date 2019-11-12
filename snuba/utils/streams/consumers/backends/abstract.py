@@ -19,33 +19,6 @@ class ConsumerBackend(ABC, Generic[TStream, TOffset, TValue]):
     """
 
     @abstractmethod
-    def subscribe(
-        self,
-        topics: Sequence[str],
-        on_assign: Optional[Callable[[Mapping[TStream, TOffset]], None]] = None,
-        on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
-    ) -> None:
-        """
-        Subscribe to topic streams. This replaces a previous subscription.
-        This method does not block. The subscription may not be fulfilled
-        immediately: instead, the ``on_assign`` and ``on_revoke`` callbacks
-        are called when the subscription state changes with the updated
-        assignment for this consumer.
-
-        Raises a ``RuntimeError`` if called on a closed consumer.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def unsubscribe(self) -> None:
-        """
-        Unsubscribe from streams.
-
-        Raises a ``RuntimeError`` if called on a closed consumer.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def poll(
         self, timeout: Optional[float] = None
     ) -> Optional[Message[TStream, TOffset, TValue]]:
@@ -136,4 +109,43 @@ class ConsumerBackend(ABC, Generic[TStream, TOffset, TValue]):
         Raises a ``TimeoutError`` if the consumer is unable to be closed
         before the timeout is reached.
         """
+        raise NotImplementedError
+
+
+class BalancedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
+    @abstractmethod
+    def subscribe(
+        self,
+        topics: Sequence[str],
+        on_assign: Optional[Callable[[Mapping[TStream, TOffset]], None]] = None,
+        on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
+    ) -> None:
+        """
+        Subscribe to topic streams. This replaces a previous subscription.
+        This method does not block. The subscription may not be fulfilled
+        immediately: instead, the ``on_assign`` and ``on_revoke`` callbacks
+        are called when the subscription state changes with the updated
+        assignment for this consumer.
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def unsubscribe(self) -> None:
+        """
+        Unsubscribe from streams.
+
+        Raises a ``RuntimeError`` if called on a closed consumer.
+        """
+        raise NotImplementedError
+
+
+class ManagedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
+    @abstractmethod
+    def assign(self, streams: Mapping[TStream, Optional[TOffset]]) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def unassign(self) -> None:
         raise NotImplementedError
