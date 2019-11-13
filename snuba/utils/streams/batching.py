@@ -14,7 +14,7 @@ from typing import (
 )
 
 from snuba.utils.metrics.backends.abstract import MetricsBackend
-from snuba.utils.streams.consumers.consumer import Consumer
+from snuba.utils.streams.consumers.consumer import BalancedConsumer
 from snuba.utils.streams.consumers.types import (
     ConsumerError,
     Message,
@@ -93,7 +93,7 @@ class BatchingConsumer:
 
     def __init__(
         self,
-        consumer: Consumer[TStream, TOffset, TValue],
+        consumer: BalancedConsumer[TStream, TOffset, TValue],
         topic: str,
         worker: AbstractBatchWorker[Message[TStream, TOffset, TValue], TResult],
         max_batch_size: int,
