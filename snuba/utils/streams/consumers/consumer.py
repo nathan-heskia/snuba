@@ -27,7 +27,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
         if commit_retry_policy is None:
             commit_retry_policy = NoRetryPolicy()
 
-        self.__backend = backend
+        self._backend = backend
         self.__commit_retry_policy = commit_retry_policy
 
     def poll(
@@ -61,7 +61,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.poll(timeout)
+        return self._backend.poll(timeout)
 
     def tell(self) -> Mapping[TStream, TOffset]:
         """
@@ -69,7 +69,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.tell()
+        return self._backend.tell()
 
     def seek(self, offsets: Mapping[TStream, TOffset]) -> None:
         """
@@ -77,7 +77,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.seek(offsets)
+        return self._backend.seek(offsets)
 
     def pause(self, streams: Sequence[TStream]) -> None:
         """
@@ -85,7 +85,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.pause(streams)
+        return self._backend.pause(streams)
 
     def resume(self, streams: Sequence[TStream]) -> None:
         """
@@ -93,7 +93,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__backend.resume(streams)
+        return self._backend.resume(streams)
 
     def commit(self) -> Mapping[TStream, TOffset]:
         """
@@ -103,7 +103,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
-        return self.__commit_retry_policy.call(self.__backend.commit)
+        return self.__commit_retry_policy.call(self._backend.commit)
 
     def close(self, timeout: Optional[float] = None) -> None:
         """
@@ -114,7 +114,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
         Raises a ``TimeoutError`` if the consumer is unable to be closed
         before the timeout is reached.
         """
-        return self.__backend.close()
+        return self._backend.close()
 
 
 class BalancedConsumer(Consumer[TStream, TOffset, TValue]):
@@ -150,7 +150,7 @@ class BalancedConsumer(Consumer[TStream, TOffset, TValue]):
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
         return cast(
-            BalancedConsumerBackend[TStream, TOffset, TValue], self.__backend
+            BalancedConsumerBackend[TStream, TOffset, TValue], self._backend
         ).subscribe(topics, on_assign, on_revoke)
 
     def unsubscribe(self) -> None:
@@ -160,7 +160,7 @@ class BalancedConsumer(Consumer[TStream, TOffset, TValue]):
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
         return cast(
-            BalancedConsumerBackend[TStream, TOffset, TValue], self.__backend
+            BalancedConsumerBackend[TStream, TOffset, TValue], self._backend
         ).unsubscribe()
 
 
@@ -174,10 +174,10 @@ class ManagedConsumer(Consumer[TStream, TOffset, TValue]):
 
     def assign(self, streams: Mapping[TStream, Optional[TOffset]]) -> None:
         return cast(
-            ManagedConsumerBackend[TStream, TOffset, TValue], self.__backend
+            ManagedConsumerBackend[TStream, TOffset, TValue], self._backend
         ).assign(streams)
 
     def unassign(self) -> None:
         return cast(
-            ManagedConsumerBackend[TStream, TOffset, TValue], self.__backend
+            ManagedConsumerBackend[TStream, TOffset, TValue], self._backend
         ).unassign()
