@@ -9,7 +9,7 @@ from snuba.snapshots import SnapshotId
 from snuba.stateful_consumer.control_protocol import TransactionData
 from snuba.utils.retries import BasicRetryPolicy, RetryPolicy, constant_delay
 from snuba.utils.streams.batching import BatchingConsumer
-from snuba.utils.streams.consumers.consumer import Consumer
+from snuba.utils.streams.consumers.consumer import BalancedConsumer
 from snuba.utils.streams.consumers.backends.kafka import KafkaConsumerBackend, KafkaConsumerBackendWithCommitLog, TransportError, build_kafka_consumer_configuration
 
 
@@ -116,7 +116,7 @@ class ConsumerBuilder:
             )
 
         return BatchingConsumer(
-            Consumer(
+            BalancedConsumer(
                 backend,
                 self.__commit_retry_policy,
             ),

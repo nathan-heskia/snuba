@@ -42,7 +42,7 @@ def replacer(*, replacements_topic, consumer_group, bootstrap_server, clickhouse
     from snuba.clickhouse.native import ClickhousePool
     from snuba.replacer import ReplacerWorker
     from snuba.utils.streams.batching import BatchingConsumer
-    from snuba.utils.streams.consumers.consumer import Consumer
+    from snuba.utils.streams.consumers.consumer import BalancedConsumer
     from snuba.utils.streams.consumers.backends.kafka import KafkaConsumerBackend, TransportError, build_kafka_consumer_configuration
 
     sentry_sdk.init(dsn=settings.SENTRY_DSN)
@@ -79,7 +79,7 @@ def replacer(*, replacements_topic, consumer_group, bootstrap_server, clickhouse
     )
 
     replacer = BatchingConsumer(
-        Consumer(
+        BalancedConsumer(
             KafkaConsumerBackend(
                 build_kafka_consumer_configuration(
                     bootstrap_servers=bootstrap_server,

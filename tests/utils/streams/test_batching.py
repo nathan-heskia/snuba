@@ -4,13 +4,13 @@ from typing import Any, Callable, Mapping, MutableMapping, MutableSequence, Sequ
 from unittest.mock import patch
 
 from snuba.utils.metrics.backends.dummy import DummyMetricsBackend
-from snuba.utils.streams.consumers.consumer import Consumer
-from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
+from snuba.utils.streams.consumers.consumer import BalancedConsumer
+from snuba.utils.streams.consumers.backends.abstract import BalancedConsumerBackend
 from snuba.utils.streams.consumers.backends.kafka import KafkaMessage, TopicPartition
 from snuba.utils.streams.batching import AbstractBatchWorker, BatchingConsumer
 
 
-class FakeKafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
+class FakeKafkaConsumerBackend(BalancedConsumerBackend[TopicPartition, int, bytes]):
     def __init__(self):
         self.items: MutableSequence[KafkaMessage] = []
         self.commit_calls = 0
@@ -78,7 +78,7 @@ class TestConsumer(object):
         backend = FakeKafkaConsumerBackend()
         worker = FakeWorker()
         batching_consumer = BatchingConsumer(
-            Consumer(backend),
+            BalancedConsumer(backend),
             'topic',
             worker=worker,
             max_batch_size=2,
@@ -101,7 +101,7 @@ class TestConsumer(object):
         backend = FakeKafkaConsumerBackend()
         worker = FakeWorker()
         batching_consumer = BatchingConsumer(
-            Consumer(backend),
+            BalancedConsumer(backend),
             'topic',
             worker=worker,
             max_batch_size=100,
