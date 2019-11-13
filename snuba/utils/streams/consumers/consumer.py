@@ -13,10 +13,9 @@ class Consumer(Generic[TStream, TOffset, TValue]):
     """
     This class provides an interface for consuming messages from a
     multiplexed collection of streams. The specific implementation of how
-    messages are consumed is delegated to the backend implementation.
-
-    This class should generally not be instantiated directly, since it does
-    not provide the means for subscribing to streams.
+    messages are consumed is delegated to the backend implementation. This
+    class should generally not be instantiated directly, since it does not
+    provide the means for subscribing to streams.
 
     All methods are blocking unless otherise noted in the documentation for
     that method.
@@ -121,6 +120,11 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
 
 class BalancedConsumer(Consumer[TStream, TOffset, TValue]):
+    """
+    This class extends the base ``Consumer`` implementation, enabling the
+    consumer to subscribe to topic streams as part of a consumer group.
+    """
+
     def __init__(
         self,
         backend: BalancedConsumerBackend[TStream, TOffset, TValue],
@@ -165,22 +169,3 @@ class BalancedConsumer(Consumer[TStream, TOffset, TValue]):
         return cast(
             BalancedConsumerBackend[TStream, TOffset, TValue], self._backend
         ).unsubscribe()
-
-
-class ManagedConsumer(Consumer[TStream, TOffset, TValue]):
-    def __init__(
-        self,
-        backend: ManagedConsumerBackend[TStream, TOffset, TValue],
-        commit_retry_policy: Optional[RetryPolicy] = None,
-    ):
-        super().__init__(backend, commit_retry_policy)
-
-    def assign(self, streams: Mapping[TStream, Optional[TOffset]]) -> None:
-        return cast(
-            ManagedConsumerBackend[TStream, TOffset, TValue], self._backend
-        ).assign(streams)
-
-    def unassign(self) -> None:
-        return cast(
-            ManagedConsumerBackend[TStream, TOffset, TValue], self._backend
-        ).unassign()

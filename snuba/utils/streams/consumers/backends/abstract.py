@@ -139,13 +139,3 @@ class BalancedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         Raises a ``RuntimeError`` if called on a closed consumer.
         """
         raise NotImplementedError
-
-
-class ManagedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
-    @abstractmethod
-    def assign(self, streams: Mapping[TStream, Optional[TOffset]]) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def unassign(self) -> None:
-        raise NotImplementedError
