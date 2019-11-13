@@ -15,6 +15,9 @@ class Consumer(Generic[TStream, TOffset, TValue]):
     multiplexed collection of streams. The specific implementation of how
     messages are consumed is delegated to the backend implementation.
 
+    This class should generally not be instantiated directly, since it does
+    not provide the means for subscribing to streams.
+
     All methods are blocking unless otherise noted in the documentation for
     that method.
     """
