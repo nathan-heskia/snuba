@@ -245,3 +245,27 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
                 self.__backend.seek({message.stream: message.offset})
 
         return message
+
+    def tell(self) -> Mapping[TStream, TOffset]:
+        return self.__backend.tell()
+
+    def seek(self, offsets: Mapping[TStream, TOffset]) -> None:
+        # TODO: Streams should be paused or resumed on seek depending on their
+        # relationship to the remote offset(s).
+        raise NotImplementedError
+
+    def pause(self, streams: Sequence[TStream]) -> None:
+        raise NotImplementedError
+
+    def resume(self, streams: Sequence[TStream]) -> None:
+        raise NotImplementedError
+
+    def commit(self) -> Mapping[TStream, TOffset]:
+        return self.__backend.commit()
+
+    def close(self, timeout: Optional[float] = None) -> None:
+        self.__shutdown_requested.set()
+        try:
+            return self.__backend.close(timeout)
+        finally:
+            self.__commit_log_consumer_future.result(timeout=0)
