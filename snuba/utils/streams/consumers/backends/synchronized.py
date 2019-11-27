@@ -65,9 +65,6 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         self.__commit_log_consumer_future = execute(self.__run_commit_log_consumer)
 
     def __run_commit_log_consumer(self) -> None:
-        # TODO: How does the commit log consumer ensure that it is the only
-        # consumer within it's consumer group (or that it otherwise has the
-        # comprehensive set of partitions assigned for the commit log topic?)
         # TODO: How do we ensure that the commit log consumer is not committing
         # it's offsets (or is subject to automatic offset resets?)
 
