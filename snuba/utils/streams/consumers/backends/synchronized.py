@@ -2,7 +2,16 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Event
-from typing import Callable, Generic, Mapping, MutableMapping, Optional, Set, Sequence
+from typing import (
+    Callable,
+    Generic,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Set,
+    Sequence,
+)
 
 from snuba.utils.concurrent import Synchronized, execute
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
@@ -32,6 +41,18 @@ class Subscription(Generic[TStream, TOffset]):
     remote_consumer_group_offsets: MutableMapping[
         TStream, MutableMapping[ConsumerGroup, TOffset]
     ] = field(default_factory=lambda: defaultdict(dict))
+
+    def get_effective_remote_consumer_group_offset(
+        self, stream: TStream, groups: Iterable[ConsumerGroup]
+    ) -> Optional[TOffset]:
+        offsets = self.remote_consumer_group_offsets[stream]
+        return min(
+            filter(
+                lambda offset: offset is not None,
+                [offsets.get(group) for group in groups],
+            ),
+            default=None,
+        )
 
 
 class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
@@ -128,18 +149,6 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
                             message.value.stream
                         ][message.value.consumer_group] = message.value.offset
 
-    def __get_effective_remote_offset(
-        self, subscription: Subscription[TStream, TOffset], stream: TStream
-    ) -> Optional[TOffset]:
-        offsets = subscription.remote_consumer_group_offsets[stream]
-        return min(
-            filter(
-                lambda offset: offset is not None,
-                [offsets.get(group) for group in self.__remote_consumer_groups],
-            ),
-            default=None,
-        )
-
     def subscribe(
         self,
         topics: Sequence[
@@ -156,8 +165,8 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         def assignment_callback(streams: Mapping[TStream, TOffset]) -> None:
             with self.__subscription.get() as subscription:
                 for stream, offset in streams.items():
-                    effective_remote_offset = self.__get_effective_remote_offset(
-                        subscription, stream
+                    remote_offset = subscription.get_effective_remote_consumer_group_offset(
+                        stream, self.__remote_consumer_groups
                     )
                     # TODO: This will have to be more intelligent about the way
                     # that pause and resume are handled as soon as those are
@@ -167,10 +176,7 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
                     # invariant, or vice versa -- in both cases, the stream
                     # should be paused, and only resumed when the caller would
                     # like it to be and the offset invariant can be maintained.
-                    if (
-                        effective_remote_offset is None
-                        or offset >= effective_remote_offset
-                    ):
+                    if remote_offset is None or offset >= remote_offset:
                         self.__backend.pause([stream])
                     else:
                         self.__backend.resume([stream])
@@ -208,13 +214,10 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
             # paused due to the remote offsets -- we should even be able to get
             # those streams without acquiring the lock here.
             for stream, offset in self.__backend.tell().items():
-                effective_remote_offset = self.__get_effective_remote_offset(
-                    subscription, stream
+                remote_offset = subscription.get_effective_remote_consumer_group_offset(
+                    stream, self.__remote_consumer_groups
                 )
-                if (
-                    effective_remote_offset is not None
-                    and effective_remote_offset > offset
-                ):
+                if remote_offset is not None and remote_offset > offset:
                     # TODO: This should be more intelligent (see comment in the
                     # assignment callback in ``subscribe`` for more details.)
                     self.__backend.resume([stream])
@@ -226,13 +229,10 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         # Check to ensure that consuming this message will not cause the local
         # offset to exeed the remote offset(s).
         with self.__subscription.get() as subscription:
-            effective_remote_offset = self.__get_effective_remote_offset(
-                subscription, message.stream
+            remote_offset = subscription.get_effective_remote_consumer_group_offset(
+                stream, self.__remote_consumer_groups
             )
-            if (
-                effective_remote_offset is None
-                or message.offset >= effective_remote_offset
-            ):
+            if remote_offset is None or message.offset >= remote_offset:
                 # If this message does exceed the remote offset(s), it should be
                 # dropped, the stream should be paused, and the offset should be
                 # reset so that this message is consumed again when the stream is
