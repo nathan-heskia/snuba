@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-from threading import Event, Lock
+from threading import Event
 from typing import Callable, Generic, Mapping, MutableMapping, Optional, Set, Sequence
 
-from snuba.utils.concurrent import execute
+from snuba.utils.concurrent import Synchronized, execute
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
 from snuba.utils.streams.consumers.types import Message, TOffset, TStream, TValue
 
@@ -57,8 +57,9 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         self.__remote_consumer_groups = remote_consumer_groups
         self.__get_commit_log_streams_for_topic = get_commit_log_streams_for_topic
 
-        self.__lock = Lock()
-        self.__subscription: Subscription[TStream, TOffset] = Subscription([])
+        self.__subscription: Synchronized[
+            Subscription[TStream, TOffset]
+        ] = Synchronized(Subscription([]))
         self.__shutdown_requested = Event()
 
         # TODO: If the commit log consumer crashes, it should cause all method
@@ -79,15 +80,15 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         current_subscription: Optional[Subscription[TStream, TOffset]] = None
 
         while not self.__shutdown_requested.is_set():
-            with self.__lock:
+            with self.__subscription.get() as subscription:
                 # If the subscription for the consumer has changed, we need to
                 # update the assignment for the commit log consumer.
-                if self.__subscription is not current_subscription:
+                if subscription is not current_subscription:
                     # Convert the subscription topics into the TStream
                     # instances where we can expect to find their commit log
                     # data.
                     assignment: Set[TStream] = set()
-                    for topic in self.__subscription.topics:
+                    for topic in subscription.topics:
                         assignment.update(
                             self.__get_commit_log_streams_for_topic(topic)
                         )
@@ -101,7 +102,7 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
                     # Once the assignment has been updated, we can safely
                     # replace the current subscription reference with the new
                     # subscription.
-                    current_subscription = self.__subscription
+                    current_subscription = subscription
 
             # TODO: This timeout was a totally arbitrary descision and may or
             # may not make sense.
@@ -118,28 +119,27 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
             # check the consumer groups reference (because we can do so without
             # taking the lock):
             if message.value.consumer_group in self.__remote_consumer_groups:
-                with self.__lock:
+                with self.__subscription.get() as subscription:
                     # If the current subscription has changed while we were
                     # waiting for a message, we need to discard this message.
                     # The next loop iteration will update the consumer
                     # assignment, and we will begin to rebuild state there.
-                    if self.__subscription is not current_subscription:
+                    if subscription is not current_subscription:
                         continue
 
                     # If the stream for this message matches the subscription
                     # topics, apply the update to the subscription offsets.
-                    if any(
-                        (message.stream in topic)
-                        for topic in self.__subscription.topics
-                    ):
-                        self.__subscription.remote_consumer_group_offsets[
+                    if any((message.stream in topic) for topic in subscription.topics):
+                        subscription.remote_consumer_group_offsets[
                             message.value.stream
                         ][message.value.consumer_group] = message.value.offset
 
-    def __get_effective_remote_offset(self, stream: TStream) -> Optional[TOffset]:
+    def __get_effective_remote_offset(
+        self, subscription: Subscription[TStream, TOffset], stream: TStream
+    ) -> Optional[TOffset]:
         # XXX: This assumes that the lock has already been acquired before
         # calling this method.
-        offsets = self.__subscription.remote_consumer_group_offsets[stream]
+        offsets = subscription.remote_consumer_group_offsets[stream]
         return min(
             filter(
                 lambda offset: offset is not None,
@@ -159,13 +159,14 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         # Update the subscription, so that the commit log consumer can starts
         # to consume the commit log data for the subscribed (and potentially
         # assigned) topics.
-        with self.__lock:
-            self.__subscription = Subscription(topics)
+        self.__subscription.set(Subscription(topics))
 
         def assignment_callback(streams: Mapping[TStream, TOffset]) -> None:
-            with self.__lock:
+            with self.__subscription.get() as subscription:
                 for stream, offset in streams.items():
-                    effective_remote_offset = self.__get_effective_remote_offset(stream)
+                    effective_remote_offset = self.__get_effective_remote_offset(
+                        subscription, stream
+                    )
                     # TODO: This will have to be more intelligent about the way
                     # that pause and resume are handled as soon as those are
                     # exposed via the public interface: for example, it's
@@ -193,8 +194,7 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         # Update the subscription, so that the commit log consumer can stop
         # consuming the commit log data for the previous (and no longer
         # potentially assigned) topics.
-        with self.__lock:
-            self.__subscription = Subscription([])
+        self.__subscription.set(Subscription([]))
 
         return self.__backend.unsubscribe()
 
@@ -211,12 +211,14 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         # It's hard to predict which scenario is more likely -- in the interest
         # of buffering and low latency, it probably makes sense to avoid
         # pausing here?)
-        with self.__lock:
+        with self.__subscription.get() as subscription:
             # TODO: This should be limited to only streams that are currently
             # paused due to the remote offsets -- we should even be able to get
             # those streams without acquiring the lock here.
             for stream, offset in self.__backend.tell().items():
-                effective_remote_offset = self.__get_effective_remote_offset(stream)
+                effective_remote_offset = self.__get_effective_remote_offset(
+                    subscription, stream
+                )
                 if (
                     effective_remote_offset is not None
                     and effective_remote_offset > offset
@@ -231,8 +233,10 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
 
         # Check to ensure that consuming this message will not cause the local
         # offset to exeed the remote offset(s).
-        with self.__lock:
-            effective_remote_offset = self.__get_effective_remote_offset(message.stream)
+        with self.__subscription.get() as subscription:
+            effective_remote_offset = self.__get_effective_remote_offset(
+                subscription, message.stream
+            )
             if (
                 effective_remote_offset is None
                 or message.offset >= effective_remote_offset

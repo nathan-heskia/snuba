@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
-from threading import Thread
-from typing import Callable, Optional, TypeVar
+from contextlib import contextmanager
+from threading import Lock, Thread
+from typing import Callable, Generic, Iterator, Optional, TypeVar
 
 
 T = TypeVar("T")
@@ -38,3 +39,24 @@ def execute(
     Thread(target=run, name=name, daemon=daemon).start()
 
     return future
+
+
+class Synchronized(Generic[T]):
+    def __init__(self, value: T, lock: Optional[Lock] = None) -> None:
+        if lock is None:
+            lock = Lock()
+
+        self.__value = value
+        self.__lock = lock
+
+    # TODO: For future use, it might make sense to expose the other lock
+    # arguments on `get` and `set`, such as `timeout`, `block`, etc.
+
+    @contextmanager
+    def get(self) -> Iterator[T]:
+        with self.__lock:
+            yield self.__value
+
+    def set(self, value: T) -> None:
+        with self.__lock:
+            self.__value = value
