@@ -1,5 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
+
+from snuba.utils.types import Comparable
+
+
+T = TypeVar("T")
 
 
 # The ``TStream`` represents a stream of messages. This should not be a class
@@ -14,7 +19,7 @@ TStream = TypeVar("TStream")
 # The ``TOffset`` represents a single message's position in the stream. For a
 # file, this would be the seek position, or for a Kafka partition, this would
 # be the partition offset. Offset types should have a total ordering.
-TOffset = TypeVar("TOffset")
+TOffset = TypeVar("TOffset", bound=Comparable[Any])
 
 # The ``TValue`` is the type of data represented by the messages in this
 # stream. This can be a bytes object or a string, but is generally more useful
