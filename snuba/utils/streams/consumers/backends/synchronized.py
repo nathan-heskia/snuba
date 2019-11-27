@@ -137,8 +137,6 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
     def __get_effective_remote_offset(
         self, subscription: Subscription[TStream, TOffset], stream: TStream
     ) -> Optional[TOffset]:
-        # XXX: This assumes that the lock has already been acquired before
-        # calling this method.
         offsets = subscription.remote_consumer_group_offsets[stream]
         return min(
             filter(
