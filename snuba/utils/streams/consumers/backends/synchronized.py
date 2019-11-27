@@ -34,9 +34,6 @@ class Subscription(Generic[TStream, TOffset]):
     ] = field(default_factory=lambda: defaultdict(dict))
 
 
-# TODO: TOffset needs to be bound as some sort of comparable type.
-
-
 class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
     def __init__(
         self,
