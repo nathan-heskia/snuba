@@ -9,14 +9,13 @@ from typing import (
     Mapping,
     MutableMapping,
     Optional,
-    Set,
     Sequence,
+    Set,
 )
 
 from snuba.utils.concurrent import Synchronized, execute
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
 from snuba.utils.streams.consumers.types import Message, TOffset, TStream, TValue
-
 
 ConsumerGroup = str
 
@@ -78,6 +77,9 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         self.__subscription: Synchronized[
             Subscription[TStream, TOffset]
         ] = Synchronized(Subscription([]))
+
+        self.__paused_streams: Set[TStream] = set()
+
         self.__shutdown_requested = Event()
 
         # TODO: If the commit log consumer crashes, it should cause all method
@@ -162,23 +164,20 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         # assigned) topics.
         self.__subscription.set(Subscription(topics))
 
+        # TODO: How does the Kafka consumer handle paused streams? My
+        # assumption here is that the new subscription should cause those
+        # streams to be resumed again, but not sure that's accurate.
+        self.__paused_streams.clear()
+
         def assignment_callback(streams: Mapping[TStream, TOffset]) -> None:
             with self.__subscription.get() as subscription:
                 for stream, offset in streams.items():
                     remote_offset = subscription.get_effective_remote_consumer_group_offset(
                         stream, self.__remote_consumer_groups
                     )
-                    # TODO: This will have to be more intelligent about the way
-                    # that pause and resume are handled as soon as those are
-                    # exposed via the public interface: for example, it's
-                    # possible that the caller wants a stream to be paused, but
-                    # it is allowed to be consumed from by the offset
-                    # invariant, or vice versa -- in both cases, the stream
-                    # should be paused, and only resumed when the caller would
-                    # like it to be and the offset invariant can be maintained.
                     if remote_offset is None or offset >= remote_offset:
                         self.__backend.pause([stream])
-                    else:
+                    elif stream not in self.__paused_streams:
                         self.__backend.resume([stream])
 
             if on_assign is not None:
@@ -193,6 +192,11 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         # consuming the commit log data for the previous (and no longer
         # potentially assigned) topics.
         self.__subscription.set(Subscription([]))
+
+        # TODO: How does the Kafka consumer handle paused streams? My
+        # assumption here is that the new subscription should cause those
+        # streams to be resumed again, but not sure that's accurate.
+        self.__paused_streams.clear()
 
         return self.__backend.unsubscribe()
 
@@ -210,10 +214,17 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         # of buffering and low latency, it probably makes sense to avoid
         # pausing here?)
         with self.__subscription.get() as subscription:
-            # TODO: This should be limited to only streams that are currently
+            # TODO: This could be limited to only streams that are currently
             # paused due to the remote offsets -- we should even be able to get
-            # those streams without acquiring the lock here.
+            # those streams without acquiring the lock here. (See similar note
+            # about lock-free implementation in resume.)
             for stream, offset in self.__backend.tell().items():
+                # If a stream has been explicitly paused by the user of this
+                # class, we don't need to check the offsets: just leave it
+                # paused.
+                if stream in self.__paused_streams:
+                    continue
+
                 remote_offset = subscription.get_effective_remote_consumer_group_offset(
                     stream, self.__remote_consumer_groups
                 )
@@ -251,10 +262,41 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         raise NotImplementedError
 
     def pause(self, streams: Sequence[TStream]) -> None:
-        raise NotImplementedError
+        # TODO: How should this handle the scenario where the stream(s) is not
+        # part of the assignment set?
+        for stream in streams:
+            self.__paused_streams.add(stream)
+
+        return self.__backend.pause(streams)
 
     def resume(self, streams: Sequence[TStream]) -> None:
-        raise NotImplementedError
+        # TODO: How should this handle the scenario where the stream(s) is not
+        # part of the assignment set?
+
+        offsets = self.tell()
+
+        # TODO: This could be performed lock-free if the pause/resume state
+        # derived from the remote offset value was cached on this object: this
+        # doesn't necessarily need to resume immediately (it could be handled
+        # by the next run of the poll loop.)
+        resumable = []
+
+        with self.__subscription.get() as subscription:
+            for stream in streams:
+                self.__paused_streams.discard(stream)
+
+                remote_offset = subscription.get_effective_remote_consumer_group_offset(
+                    stream, self.__remote_consumer_groups
+                )
+                # NOTE: offsets[stream] should not throw a KeyError, assuming
+                # that the input value has been validated against the current
+                # stream assignment. (See the TODO at method start. Remove this
+                # comment after that has been implemented, or protect against
+                # KeyError here.)
+                if remote_offset is not None and remote_offset > offsets[stream]:
+                    resumable.append(stream)
+
+        return self.__backend.resume(resumable)
 
     def commit(self) -> Mapping[TStream, TOffset]:
         return self.__backend.commit()
