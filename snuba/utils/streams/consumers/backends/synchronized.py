@@ -151,6 +151,26 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
                             message.value.stream
                         ][message.value.consumer_group] = message.value.offset
 
+    def __update_stream_state(
+        self,
+        subscription: Subscription[TStream, TOffset],
+        stream: TStream,
+        offset: TOffset,
+    ) -> None:
+        remote_offset = subscription.get_effective_remote_consumer_group_offset(
+            stream, self.__remote_consumer_groups
+        )
+        if remote_offset is None or offset >= remote_offset:
+            self.__backend.pause([stream])
+        elif stream not in self.__paused_streams:
+            # TODO: It should be safe to call resume on a stream
+            # that is already consuming, but may have some
+            # performance drawbacks (I vaguely recall that this may
+            # flush the consume buffer in the Confluent consumer),
+            # so it may be worth caching which streams are active
+            # or paused here, or in the KafkaConsumerBackend.
+            self.__backend.resume([stream])
+
     def subscribe(
         self,
         topics: Sequence[
@@ -172,19 +192,9 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
         def assignment_callback(streams: Mapping[TStream, TOffset]) -> None:
             with self.__subscription.get() as subscription:
                 for stream, offset in streams.items():
-                    remote_offset = subscription.get_effective_remote_consumer_group_offset(
-                        stream, self.__remote_consumer_groups
-                    )
-                    if remote_offset is None or offset >= remote_offset:
-                        self.__backend.pause([stream])
-                    elif stream not in self.__paused_streams:
-                        # TODO: It should be safe to call resume on a stream
-                        # that is already consuming, but may have some
-                        # performance drawbacks (I vaguely recall that this may
-                        # flush the consume buffer in the Confluent consumer),
-                        # so it may be worth caching which streams are active
-                        # or paused here, or in the KafkaConsumerBackend.
-                        self.__backend.resume([stream])
+                    # Pause and resume streams as necessitated by their remote
+                    # offset.
+                    self.__update_stream_state(subscription, stream, offset)
 
             if on_assign is not None:
                 on_assign(streams)
@@ -225,23 +235,9 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
             # those streams without acquiring the lock here. (See similar note
             # about lock-free implementation in resume.)
             for stream, offset in self.__backend.tell().items():
-                # If a stream has been explicitly paused by the user of this
-                # class, we don't need to check the offsets: just leave it
-                # paused.
-                if stream in self.__paused_streams:
-                    continue
-
-                remote_offset = subscription.get_effective_remote_consumer_group_offset(
-                    stream, self.__remote_consumer_groups
-                )
-                if remote_offset is not None and remote_offset > offset:
-                    # TODO: It should be safe to call resume on a stream that
-                    # is already consuming, but may have some performance
-                    # drawbacks (I vaguely recall that this may flush the
-                    # consume buffer in the Confluent consumer), so it may be
-                    # worth caching which streams are active or paused here, or
-                    # in the KafkaConsumerBackend.
-                    self.__backend.resume([stream])
+                # Check if the remote offset has moved in a way that requires
+                # streams to be paused or resumed.
+                self.__update_stream_state(subscription, stream, offset)
 
         message = self.__backend.poll(timeout)
         if message is None:
@@ -274,23 +270,8 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
 
         with self.__subscription.get() as subscription:
             for stream, offset in offsets.items():
-                remote_offset = subscription.get_effective_remote_consumer_group_offset(
-                    stream, self.__remote_consumer_groups
-                )
-                if remote_offset is None or offset >= remote_offset:
-                    # If this message does exceed the remote offset(s), it should be
-                    # dropped, the stream should be paused, and the offset should be
-                    # reset so that this message is consumed again when the stream is
-                    # resumed.
-                    self.__backend.pause([stream])
-                elif stream not in self.__paused_streams:
-                    # TODO: It should be safe to call resume on a stream that
-                    # is already consuming, but may have some performance
-                    # drawbacks (I vaguely recall that this may flush the
-                    # consume buffer in the Confluent consumer), so it may be
-                    # worth caching which streams are active or paused here, or
-                    # in the KafkaConsumerBackend.
-                    self.__backend.resume([stream])
+                # Moving the stream offset may require the stream to be paused.
+                self.__update_stream_state(subscription, stream, offset)
 
     def pause(self, streams: Sequence[TStream]) -> None:
         # TODO: How should this handle the scenario where the stream(s) is not
@@ -303,31 +284,23 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
     def resume(self, streams: Sequence[TStream]) -> None:
         # TODO: How should this handle the scenario where the stream(s) is not
         # part of the assignment set?
-
-        offsets = self.tell()
+        offsets = {
+            stream: offset
+            for stream, offset in self.tell().items()
+            if stream in streams
+        }
 
         # TODO: This could be performed lock-free if the pause/resume state
         # derived from the remote offset value was cached on this object: this
         # doesn't necessarily need to resume immediately (it could be handled
         # by the next run of the poll loop.)
-        resumable = []
-
         with self.__subscription.get() as subscription:
-            for stream in streams:
+            for stream, offset in offsets.items():
                 self.__paused_streams.discard(stream)
 
-                remote_offset = subscription.get_effective_remote_consumer_group_offset(
-                    stream, self.__remote_consumer_groups
-                )
-                # NOTE: offsets[stream] should not throw a KeyError, assuming
-                # that the input value has been validated against the current
-                # stream assignment. (See the TODO at method start. Remove this
-                # comment after that has been implemented, or protect against
-                # KeyError here.)
-                if remote_offset is not None and remote_offset > offsets[stream]:
-                    resumable.append(stream)
-
-        return self.__backend.resume(resumable)
+                # Since the stream is no longer part of the paused set, check
+                # to see if it can be resumed.
+                self.__update_stream_state(subscription, stream, offset)
 
     def commit(self) -> Mapping[TStream, TOffset]:
         return self.__backend.commit()
