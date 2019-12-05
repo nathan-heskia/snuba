@@ -151,7 +151,7 @@ class SynchronizedConsumerBackend(ConsumerBackend[TStream, TOffset, TValue]):
                             message.value.stream
                         ][message.value.consumer_group] = message.value.offset
 
-    def __update_stream_states(self,) -> None:
+    def __update_stream_states(self) -> None:
         with self.__subscription.get() as subscription:
             for stream, offset in self.__backend.tell().items():
                 remote_offset = subscription.get_effective_remote_consumer_group_offset(
