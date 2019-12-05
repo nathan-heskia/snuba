@@ -118,7 +118,14 @@ def rate_limit(
         [("bypass_rate_limit", 0), ("rate_history_sec", 3600)]
     )
 
-    if bypass_rate_limit == 1:
+    if (
+        bypass_rate_limit == 1
+        # XXX: This is probably not what we want to do, since this breaks counts of concurrent
+        # threads, and we may want to have different types of ratelimiting in subscriptions
+        # vs
+        # Bypass rate limit if neither limit is set
+        or (rate_limit_params.concurrent_limit is None and rate_limit_params.per_second_limit is None)
+    ):
         yield None
 
     pipe = state.rds.pipeline(transaction=False)
