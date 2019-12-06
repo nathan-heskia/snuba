@@ -36,10 +36,18 @@ class TopicPartition(NamedTuple):
 
 
 class KafkaTopic(Topic[TopicPartition]):
-    name: str
+    def __init__(self, name: str) -> None:
+        self.__name = name
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(name={self.__name!r})"
 
     def __contains__(self, stream: TopicPartition) -> bool:
-        return stream.topic == self.name
+        return stream.topic == self.__name
+
+    @property
+    def name(self) -> str:
+        return self.__name
 
 
 class KafkaMessage(Message[TopicPartition, int, bytes]):
@@ -147,7 +155,7 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
 
     def subscribe(
         self,
-        topics: Sequence[KafkaTopic],
+        topics: Sequence[Topic[TopicPartition]],
         on_assign: Optional[Callable[[Mapping[TopicPartition, int]], None]] = None,
         on_revoke: Optional[Callable[[Sequence[TopicPartition]], None]] = None,
     ) -> None:
@@ -210,7 +218,9 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
                 self.__state = KafkaConsumerState.CONSUMING
 
         self.__consumer.subscribe(
-            topics, on_assign=assignment_callback, on_revoke=revocation_callback
+            [topic.name for topic in topics],
+            on_assign=assignment_callback,
+            on_revoke=revocation_callback,
         )
 
     def unsubscribe(self) -> None:

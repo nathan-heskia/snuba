@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractproperty
 from typing import Generic, TypeVar
 
 
@@ -49,6 +49,10 @@ class Topic(ABC, Generic[TStream]):
     """
     A topic represents a collection of streams.
     """
+
+    @abstractproperty
+    def name(self) -> str:
+        raise NotImplementedError
 
     @abstractmethod
     def __contains__(self, stream: TStream) -> bool:
