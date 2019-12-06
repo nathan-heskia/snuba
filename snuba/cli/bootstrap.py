@@ -63,7 +63,7 @@ def bootstrap(bootstrap_server, kafka, force, log_level):
                 for topic_spec in stream_loader.get_all_topic_specs():
                     topics.append(
                         NewTopic(
-                            topic_spec.topic_name,
+                            topic_spec.topic.name,
                             num_partitions=topic_spec.partitions_number,
                             replication_factor=topic_spec.replication_factor,
                         )

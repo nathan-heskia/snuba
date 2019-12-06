@@ -91,6 +91,7 @@ class ConsumerWorker(AbstractBatchWorker[KafkaMessage, ProcessedMessage]):
             self.metrics.timing("inserts", len(inserts))
 
         if replacements:
+            assert self.replacements_topic is not None
             for key, replacement in replacements:
                 self.producer.produce(
                     self.replacements_topic.name,

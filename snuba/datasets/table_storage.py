@@ -10,7 +10,7 @@ from snuba.datasets.schemas.tables import WritableTableSchema
 from snuba.processor import MessageProcessor
 from snuba.snapshots.loaders import BulkLoader
 from snuba.writer import BatchWriter
-from snuba.util.streams.consumers.backends.kafka import KafkaTopic
+from snuba.utils.streams.consumers.backends.kafka import KafkaTopic
 
 
 @dataclass(frozen=True)
