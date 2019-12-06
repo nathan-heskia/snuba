@@ -13,6 +13,7 @@ from snuba.utils.streams.consumers.consumer import Consumer
 from snuba.utils.streams.consumers.backends.kafka import (
     KafkaConsumerBackend,
     KafkaConsumerBackendWithCommitLog,
+    KafkaTopic,
     TransportError,
     build_kafka_consumer_configuration,
 )
@@ -29,13 +30,13 @@ class ConsumerBuilder:
     def __init__(
         self,
         dataset_name: str,
-        raw_topic: str,
-        replacements_topic: str,
+        raw_topic: Optional[KafkaTopic],
+        replacements_topic: Optional[KafkaTopic],
         max_batch_size: int,
         max_batch_time_ms: int,
         bootstrap_servers: Sequence[str],
         group_id: str,
-        commit_log_topic: str,
+        commit_log_topic: Optional[KafkaTopic],
         auto_offset_reset: str,
         queued_max_messages_kbytes: int,
         queued_min_messages: int,
@@ -53,19 +54,28 @@ class ConsumerBuilder:
             self.bootstrap_servers = bootstrap_servers
 
         stream_loader = enforce_table_writer(self.dataset).get_stream_loader()
-        self.raw_topic = raw_topic or stream_loader.get_default_topic_spec().topic_name
-        default_replacement_topic_name = (
-            stream_loader.get_replacement_topic_spec().topic_name
-            if stream_loader.get_replacement_topic_spec()
-            else None
-        )
-        self.replacements_topic = replacements_topic or default_replacement_topic_name
-        default_commit_log_topic_name = (
-            stream_loader.get_commit_log_topic_spec().topic_name
-            if stream_loader.get_commit_log_topic_spec()
-            else None
-        )
-        self.commit_log_topic = commit_log_topic or default_commit_log_topic_name
+
+        self.raw_topic: KafkaTopic = raw_topic or stream_loader.get_default_topic_spec().topic
+
+        self.replacements_topic: Optional[KafkaTopic]
+        if replacements_topic is not None:
+            self.replacements_topic = replacements_topic
+        else:
+            replacement_topic_spec = stream_loader.get_replacement_topic_spec()
+            if replacement_topic_spec is not None:
+                self.replacements_topic = replacement_topic_spec.topic
+            else:
+                self.replacements_topic = None
+
+        self.commit_log_topic: Optional[KafkaTopic]
+        if commit_log_topic is not None:
+            self.commit_log_topic = commit_log_topic
+        else:
+            commit_log_topic_spec = stream_loader.get_commit_log_topic_spec()
+            if commit_log_topic_spec is not None:
+                self.commit_log_topic = commit_log_topic_spec.topic
+            else:
+                self.commit_log_topic = None
 
         # XXX: This can result in a producer being built in cases where it's
         # not actually required.

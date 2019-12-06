@@ -11,7 +11,7 @@ from snuba.processor import (
 )
 from snuba.utils.metrics.backends.abstract import MetricsBackend
 from snuba.utils.streams.batching import AbstractBatchWorker
-from snuba.utils.streams.consumers.backends.kafka import KafkaMessage
+from snuba.utils.streams.consumers.backends.kafka import KafkaMessage, KafkaTopic
 
 
 logger = logging.getLogger("snuba.consumer")
@@ -26,7 +26,13 @@ class InvalidActionType(Exception):
 
 
 class ConsumerWorker(AbstractBatchWorker[KafkaMessage, ProcessedMessage]):
-    def __init__(self, dataset, producer, replacements_topic, metrics: MetricsBackend):
+    def __init__(
+        self,
+        dataset,
+        producer,
+        replacements_topic: Optional[KafkaTopic],
+        metrics: MetricsBackend,
+    ):
         self.__dataset = dataset
         self.producer = producer
         self.replacements_topic = replacements_topic
@@ -87,7 +93,7 @@ class ConsumerWorker(AbstractBatchWorker[KafkaMessage, ProcessedMessage]):
         if replacements:
             for key, replacement in replacements:
                 self.producer.produce(
-                    self.replacements_topic,
+                    self.replacements_topic.name,
                     key=str(key).encode("utf-8"),
                     value=json.dumps(replacement).encode("utf-8"),
                     on_delivery=self.delivery_callback,

@@ -10,11 +10,12 @@ from snuba.datasets.schemas.tables import WritableTableSchema
 from snuba.processor import MessageProcessor
 from snuba.snapshots.loaders import BulkLoader
 from snuba.writer import BatchWriter
+from snuba.util.streams.consumers.backends.kafka import KafkaTopic
 
 
 @dataclass(frozen=True)
 class KafkaTopicSpec:
-    topic_name: str
+    topic: KafkaTopic
     replication_factor: int = 1
     partitions_number: int = 1
 
@@ -33,12 +34,16 @@ class KafkaStreamLoader:
         commit_log_topic: Optional[str] = None,
     ) -> None:
         self.__processor = processor
-        self.__default_topic_spec = KafkaTopicSpec(topic_name=default_topic)
+        self.__default_topic_spec = KafkaTopicSpec(topic=KafkaTopic(name=default_topic))
         self.__replacement_topic_spec = (
-            KafkaTopicSpec(topic_name=replacement_topic) if replacement_topic else None
+            KafkaTopicSpec(topic=KafkaTopic(name=replacement_topic))
+            if replacement_topic
+            else None
         )
         self.__commit_log_topic_spec = (
-            KafkaTopicSpec(topic_name=commit_log_topic) if commit_log_topic else None
+            KafkaTopicSpec(topic=KafkaTopic(name=commit_log_topic))
+            if commit_log_topic
+            else None
         )
 
     def get_processor(self) -> MessageProcessor:

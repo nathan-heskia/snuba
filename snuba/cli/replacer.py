@@ -1,15 +1,18 @@
 import logging
 import signal
+from typing import Optional
 
 import click
 
 from snuba import settings
 from snuba.datasets.factory import enforce_table_writer, get_dataset
+from snuba.utils.streams.consumers.backends.kafka import KafkaTopic
 
 
 @click.command()
 @click.option(
     "--replacements-topic",
+    "replacements_topic_name",
     default=None,
     help="Topic to consume replacement messages from.",
 )
@@ -83,7 +86,7 @@ from snuba.datasets.factory import enforce_table_writer, get_dataset
 )
 def replacer(
     *,
-    replacements_topic,
+    replacements_topic_name: Optional[str],
     consumer_group,
     bootstrap_server,
     clickhouse_host,
@@ -97,7 +100,7 @@ def replacer(
     log_level,
     dogstatsd_host,
     dogstatsd_port,
-):
+) -> None:
 
     import sentry_sdk
     from snuba import util
@@ -123,7 +126,11 @@ def replacer(
     assert (
         default_replacement_topic_spec is not None
     ), f"Dataset {dataset} does not have a replacement topic."
-    replacements_topic = replacements_topic or default_replacement_topic_spec.topic_name
+    replacements_topic = (
+        KafkaTopic(replacements_topic_name)
+        if replacements_topic_name is not None
+        else default_replacement_topic_spec.topic
+    )
 
     metrics = util.create_metrics(
         dogstatsd_host, dogstatsd_port, "snuba.replacer", tags={"group": consumer_group}

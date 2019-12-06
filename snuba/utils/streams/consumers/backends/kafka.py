@@ -391,7 +391,7 @@ class KafkaConsumerBackendWithCommitLog(KafkaConsumerBackend):
         self,
         configuration: Mapping[str, Any],
         producer: ConfluentProducer,
-        commit_log_topic: str,
+        commit_log_topic: Topic[TopicPartition],
     ) -> None:
         super().__init__(configuration)
         self.__producer = producer
@@ -413,7 +413,7 @@ class KafkaConsumerBackendWithCommitLog(KafkaConsumerBackend):
 
         for stream, offset in offsets.items():
             self.__producer.produce(
-                self.__commit_log_topic,
+                self.__commit_log_topic.name,
                 key="{}:{}:{}".format(
                     stream.topic, stream.partition, self.__group_id
                 ).encode("utf-8"),

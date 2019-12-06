@@ -1,5 +1,6 @@
 import logging
 import signal
+from typing import Optional
 
 import click
 
@@ -8,19 +9,25 @@ from snuba.datasets.factory import get_dataset, DATASET_NAMES
 from snuba.datasets.cdc import CdcDataset
 from snuba.consumers.consumer_builder import ConsumerBuilder
 from snuba.stateful_consumer.consumer_state_machine import ConsumerStateMachine
+from snuba.utils.streams.consumers.backends.kafka import KafkaTopic
 
 
 @click.command()
 @click.option(
-    "--raw-events-topic", default=None, help="Topic to consume raw events from."
+    "--raw-events-topic",
+    "raw_events_topic_name",
+    default=None,
+    help="Topic to consume raw events from.",
 )
 @click.option(
     "--replacements-topic",
+    "replacements_topic_name",
     default=None,
     help="Topic to produce replacement messages info.",
 )
 @click.option(
     "--commit-log-topic",
+    "commit_log_topic_name",
     default=None,
     help="Topic for committed offsets to be written to, triggering post-processing task(s)",
 )
@@ -91,9 +98,10 @@ from snuba.stateful_consumer.consumer_state_machine import ConsumerStateMachine
     help="Runs a stateful consumer (that manages snapshots) instead of a basic one.",
 )
 def consumer(
-    raw_events_topic,
-    replacements_topic,
-    commit_log_topic,
+    *,
+    raw_events_topic_name: Optional[str],
+    replacements_topic_name: Optional[str],
+    commit_log_topic_name: Optional[str],
     control_topic,
     consumer_group,
     bootstrap_server,
@@ -107,7 +115,7 @@ def consumer(
     dogstatsd_host,
     dogstatsd_port,
     stateful_consumer,
-):
+) -> None:
 
     import sentry_sdk
 
@@ -121,13 +129,25 @@ def consumer(
 
     consumer_builder = ConsumerBuilder(
         dataset_name=dataset_name,
-        raw_topic=raw_events_topic,
-        replacements_topic=replacements_topic,
+        raw_topic=(
+            KafkaTopic(raw_events_topic_name)
+            if raw_events_topic_name is not None
+            else None
+        ),
+        replacements_topic=(
+            KafkaTopic(replacements_topic_name)
+            if replacements_topic_name is not None
+            else None
+        ),
+        commit_log_topic=(
+            KafkaTopic(commit_log_topic_name)
+            if commit_log_topic_name is not None
+            else None
+        ),
         max_batch_size=max_batch_size,
         max_batch_time_ms=max_batch_time_ms,
         bootstrap_servers=bootstrap_server,
         group_id=consumer_group,
-        commit_log_topic=commit_log_topic,
         auto_offset_reset=auto_offset_reset,
         queued_max_messages_kbytes=queued_max_messages_kbytes,
         queued_min_messages=queued_min_messages,
