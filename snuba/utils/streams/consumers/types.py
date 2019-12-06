@@ -45,6 +45,19 @@ class Message(ABC, Generic[TStream, TOffset, TValue]):
         raise NotImplementedError
 
 
+class Topic(ABC, Generic[TStream]):
+    """
+    A topic represents a collection of streams.
+    """
+
+    @abstractmethod
+    def __contains__(self, stream: TStream) -> bool:
+        """
+        Return whether or not the provided stream is part of this topic.
+        """
+        raise NotImplementedError
+
+
 class ConsumerError(Exception):
     """
     Base class for exceptions that are raised during consumption.

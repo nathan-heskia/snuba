@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Callable, Generic, Mapping, Optional, Sequence
 
-from snuba.utils.streams.consumers.types import Message, TStream, TOffset, TValue
+from snuba.utils.streams.consumers.types import Message, Topic, TStream, TOffset, TValue
 
 
 class ConsumerBackend(ABC, Generic[TStream, TOffset, TValue]):
@@ -21,7 +21,7 @@ class ConsumerBackend(ABC, Generic[TStream, TOffset, TValue]):
     @abstractmethod
     def subscribe(
         self,
-        topics: Sequence[str],
+        topics: Sequence[Topic[TStream]],
         on_assign: Optional[Callable[[Mapping[TStream, TOffset]], None]] = None,
         on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
     ) -> None:

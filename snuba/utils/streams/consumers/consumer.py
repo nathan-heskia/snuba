@@ -2,7 +2,7 @@ from typing import Callable, Generic, Mapping, Optional, Sequence
 
 from snuba.utils.retries import NoRetryPolicy, RetryPolicy
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
-from snuba.utils.streams.consumers.types import Message, TStream, TOffset, TValue
+from snuba.utils.streams.consumers.types import Message, Topic, TStream, TOffset, TValue
 
 
 class Consumer(Generic[TStream, TOffset, TValue]):
@@ -28,7 +28,7 @@ class Consumer(Generic[TStream, TOffset, TValue]):
 
     def subscribe(
         self,
-        topics: Sequence[str],
+        topics: Sequence[Topic[TStream]],
         on_assign: Optional[Callable[[Mapping[TStream, TOffset]], None]] = None,
         on_revoke: Optional[Callable[[Sequence[TStream]], None]] = None,
     ) -> None:

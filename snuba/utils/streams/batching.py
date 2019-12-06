@@ -18,6 +18,7 @@ from snuba.utils.streams.consumers.consumer import Consumer
 from snuba.utils.streams.consumers.types import (
     ConsumerError,
     Message,
+    Topic,
     TStream,
     TOffset,
     TValue,
@@ -94,7 +95,7 @@ class BatchingConsumer:
     def __init__(
         self,
         consumer: Consumer[TStream, TOffset, TValue],
-        topic: str,
+        topic: Topic[TStream],
         worker: AbstractBatchWorker[Message[TStream, TOffset, TValue], TResult],
         max_batch_size: int,
         max_batch_time: int,

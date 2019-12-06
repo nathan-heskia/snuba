@@ -19,7 +19,12 @@ from confluent_kafka import Producer as ConfluentProducer
 from confluent_kafka import TopicPartition as ConfluentTopicPartition
 
 from snuba.utils.streams.consumers.backends.abstract import ConsumerBackend
-from snuba.utils.streams.consumers.types import ConsumerError, EndOfStream, Message
+from snuba.utils.streams.consumers.types import (
+    ConsumerError,
+    EndOfStream,
+    Message,
+    Topic,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +33,13 @@ logger = logging.getLogger(__name__)
 class TopicPartition(NamedTuple):
     topic: str
     partition: int
+
+
+class KafkaTopic(Topic[TopicPartition]):
+    name: str
+
+    def __contains__(self, stream: TopicPartition) -> bool:
+        return stream.topic == self.name
 
 
 class KafkaMessage(Message[TopicPartition, int, bytes]):
@@ -135,7 +147,7 @@ class KafkaConsumerBackend(ConsumerBackend[TopicPartition, int, bytes]):
 
     def subscribe(
         self,
-        topics: Sequence[str],
+        topics: Sequence[KafkaTopic],
         on_assign: Optional[Callable[[Mapping[TopicPartition, int]], None]] = None,
         on_revoke: Optional[Callable[[Sequence[TopicPartition]], None]] = None,
     ) -> None:
